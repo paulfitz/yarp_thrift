@@ -3,7 +3,7 @@ This project is a way to compile Apache thrift with CMake.
 How to use:
 
     mkdir build && ccmake ..
-    point THRIFT_ROOT to thrift source code
+    # point THRIFT_ROOT to thrift source code
     make
 
 If you are not familiar with CMake, try:
