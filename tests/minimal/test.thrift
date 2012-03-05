@@ -7,7 +7,7 @@ struct Test {
 }
 
 
-service TestService {
+service Ziggy {
   void ping();
   i32 compute(1:i32 id, 2:Test test);
   oneway void stream();

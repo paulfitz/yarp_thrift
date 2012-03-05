@@ -27,6 +27,7 @@
 #include <sys/stat.h>
 #include <sstream>
 #include "t_generator.h"
+#include "t_oop_generator.h"
 #include "platform.h"
 using namespace std;
 
@@ -34,25 +35,25 @@ using namespace std;
 /**
  * YARP code generator
  *
+ * Serialization:
+ *   Bottle compatible, why not.
+ *   BOTTLE_CODE
+ *   LENGTH
+ *
  * mostly copy/pasting/tweaking from mcslee's work.
  */
-class t_yarp_generator : public t_generator {
+class t_yarp_generator : public t_oop_generator {
  public:
   t_yarp_generator(
       t_program* program,
       const std::map<std::string, std::string>& parsed_options,
       const std::string& option_string)
-    : t_generator(program)
+    : t_oop_generator(program)
   {
     (void) parsed_options;
     (void) option_string;  
     out_dir_base_ = "gen-yarp";
-    escape_.clear();
-    escape_['&']  = "&amp;";
-    escape_['<']  = "&lt;";
-    escape_['>']  = "&gt;";
-    escape_['"']  = "&quot;";
-    escape_['\''] = "&apos;";
+    gen_pure_enums_ = true;
   }
 
   void generate_program();
@@ -61,7 +62,6 @@ class t_yarp_generator : public t_generator {
   void generate_program_toc_rows(t_program* tprog,
          std::vector<t_program*>& finished);
   void generate_index();
-  void generate_css();
 
   /**
    * Program-level generation functions
@@ -75,11 +75,197 @@ class t_yarp_generator : public t_generator {
   void generate_xception(t_struct*   txception);
 
   void print_doc        (t_doc* tdoc);
-  int  print_type       (t_type* ttype);
-  void print_const_value(t_const_value* tvalue);
+  std::string print_type       (t_type* ttype);
+  std::string print_const_value(t_const_value* tvalue);
+
+  std::string function_prototype(t_function *tfn);
+
+  std::string type_name(t_type* ttype, bool in_typedef=false, bool arg=false);
+  std::string base_type_name(t_base_type::t_base tbase);
+  std::string namespace_prefix(std::string ns);
+  std::string namespace_open(std::string ns);
+  std::string namespace_close(std::string ns);
+  bool is_complex_type(t_type* ttype) {
+    ttype = get_true_type(ttype);
+    return
+      ttype->is_container() ||
+      ttype->is_struct() ||
+      ttype->is_xception() ||
+      (ttype->is_base_type() && (((t_base_type*)ttype)->get_base() == t_base_type::TYPE_STRING));
+  }
 
   std::ofstream f_out_;
+  bool gen_pure_enums_;
 };
+
+
+
+
+
+/////////////////////////////////////////////////////////////////////
+/// C++ generator code begins
+/////////////////////////////////////////////////////////////////////
+
+string t_yarp_generator::type_name(t_type* ttype, bool in_typedef, bool arg) {
+  if (ttype->is_base_type()) {
+    string bname = base_type_name(((t_base_type*)ttype)->get_base());
+    if (!arg) {
+      return bname;
+    }
+
+    if (((t_base_type*)ttype)->get_base() == t_base_type::TYPE_STRING) {
+      return "const " + bname + "&";
+    } else {
+      return "const " + bname;
+    }
+  }
+
+  // Check for a custom overloaded C++ name
+  if (ttype->is_container()) {
+    string cname;
+
+    t_container* tcontainer = (t_container*) ttype;
+    if (tcontainer->has_cpp_name()) {
+      cname = tcontainer->get_cpp_name();
+    } else if (ttype->is_map()) {
+      t_map* tmap = (t_map*) ttype;
+      cname = "std::map<" +
+        type_name(tmap->get_key_type(), in_typedef) + ", " +
+        type_name(tmap->get_val_type(), in_typedef) + "> ";
+    } else if (ttype->is_set()) {
+      t_set* tset = (t_set*) ttype;
+      cname = "std::set<" + type_name(tset->get_elem_type(), in_typedef) + "> ";
+    } else if (ttype->is_list()) {
+      t_list* tlist = (t_list*) ttype;
+      cname = "std::vector<" + type_name(tlist->get_elem_type(), in_typedef) + "> ";
+    }
+
+    if (arg) {
+      return "const " + cname + "&";
+    } else {
+      return cname;
+    }
+  }
+
+  string class_prefix;
+  if (in_typedef && (ttype->is_struct() || ttype->is_xception())) {
+    class_prefix = "class ";
+  }
+
+  // Check if it needs to be namespaced
+  string pname;
+  t_program* program = ttype->get_program();
+  if (program != NULL && program != program_) {
+    pname =
+      class_prefix +
+      namespace_prefix(program->get_namespace("cpp")) +
+      ttype->get_name();
+  } else {
+    pname = class_prefix + ttype->get_name();
+  }
+
+  if (ttype->is_enum() && !gen_pure_enums_) {
+    pname += "::type";
+  }
+
+  if (arg) {
+    if (is_complex_type(ttype)) {
+      return "const " + pname + "&";
+    } else {
+      return "const " + pname;
+    }
+  } else {
+    return pname;
+  }
+}
+
+string t_yarp_generator::base_type_name(t_base_type::t_base tbase) {
+  switch (tbase) {
+  case t_base_type::TYPE_VOID:
+    return "void";
+  case t_base_type::TYPE_STRING:
+    return "std::string";
+  case t_base_type::TYPE_BOOL:
+    return "bool";
+  case t_base_type::TYPE_BYTE:
+    return "int8_t";
+  case t_base_type::TYPE_I16:
+    return "int16_t";
+  case t_base_type::TYPE_I32:
+    return "int32_t";
+  case t_base_type::TYPE_I64:
+    return "int64_t";
+  case t_base_type::TYPE_DOUBLE:
+    return "double";
+  default:
+    throw "compiler error: no C++ base type name for base type " + t_base_type::t_base_name(tbase);
+  }
+}
+
+
+string t_yarp_generator::namespace_prefix(string ns) {
+  // Always start with "::", to avoid possible name collisions with
+  // other names in one of the current namespaces.
+  //
+  // We also need a leading space, in case the name is used inside of a
+  // template parameter.  "MyTemplate<::foo::Bar>" is not valid C++,
+  // since "<:" is an alternative token for "[".
+  string result = " ::";
+
+  if (ns.size() == 0) {
+    return result;
+  }
+  string::size_type loc;
+  while ((loc = ns.find(".")) != string::npos) {
+    result += ns.substr(0, loc);
+    result += "::";
+    ns = ns.substr(loc+1);
+  }
+  if (ns.size() > 0) {
+    result += ns + "::";
+  }
+  return result;
+}
+
+string t_yarp_generator::namespace_open(string ns) {
+  if (ns.size() == 0) {
+    return "";
+  }
+  string result = "";
+  string separator = "";
+  string::size_type loc;
+  while ((loc = ns.find(".")) != string::npos) {
+    result += separator;
+    result += "namespace ";
+    result += ns.substr(0, loc);
+    result += " {";
+    separator = " ";
+    ns = ns.substr(loc+1);
+  }
+  if (ns.size() > 0) {
+    result += separator + "namespace " + ns + " {";
+  }
+  return result;
+}
+
+string t_yarp_generator::namespace_close(string ns) {
+  if (ns.size() == 0) {
+    return "";
+  }
+  string result = "}";
+  string::size_type loc;
+  while ((loc = ns.find(".")) != string::npos) {
+    result += "}";
+    ns = ns.substr(loc+1);
+  }
+  result += " // namespace";
+  return result;
+}
+
+/////////////////////////////////////////////////////////////////////
+/// C++ generator code ends
+/////////////////////////////////////////////////////////////////////
+
 
 /**
  * Emits the Table of Contents links at the top of the module's page
@@ -92,11 +278,6 @@ void t_yarp_generator::generate_program_toc() {
 }
 
 
-/**
- * Recurses through from the provided program and generates a ToC row
- * for each discovered program exactly once by maintaining the list of
- * completed rows in 'finished'
- */
 void t_yarp_generator::generate_program_toc_rows(t_program* tprog,
          std::vector<t_program*>& finished) {
   for (vector<t_program*>::iterator iter = finished.begin();
@@ -114,48 +295,39 @@ void t_yarp_generator::generate_program_toc_rows(t_program* tprog,
   }
 }
 
-/**
- * Emits the Table of Contents links at the top of the module's page
- */
 void t_yarp_generator::generate_program_toc_row(t_program* tprog) {
-  string fname = tprog->get_name() + ".html";
-  f_out_ << "<tr>" << endl << "<td>" << tprog->get_name() << "</td><td>";
+  string fname = tprog->get_name();
+  f_out_ << "// " << fname << endl;
   if (!tprog->get_services().empty()) {
     vector<t_service*> services = tprog->get_services();
     vector<t_service*>::iterator sv_iter;
     for (sv_iter = services.begin(); sv_iter != services.end(); ++sv_iter) {
       string name = get_service_name(*sv_iter);
-      f_out_ << "<a href=\"" << fname << "#Svc_" << name << "\">" << name
-        << "</a><br/>" << endl;
-      f_out_ << "<ul>" << endl;
-      map<string,string> fn_yarp;
+      //printf("//  %s (service)\n", name.c_str());
+      f_out_ << "//  service: " << name << endl;
+      //map<string,string> fn_yarp;
       vector<t_function*> functions = (*sv_iter)->get_functions();
       vector<t_function*>::iterator fn_iter;
       for (fn_iter = functions.begin(); fn_iter != functions.end(); ++fn_iter) {
         string fn_name = (*fn_iter)->get_name();
-        string yarp = "<li><a href=\"" + fname + "#Fn_" + name + "_" +
-          fn_name + "\">" + fn_name + "</a></li>";
-        fn_yarp.insert(pair<string,string>(fn_name, yarp));
+	//printf("//    %s (fn)\n", fn_name.c_str());
+	f_out_ << "//    fn: " << fn_name << endl;
+        //fn_yarp.insert(pair<string,string>(fn_name, yarp));
       }
-      for (map<string,string>::iterator yarp_iter = fn_yarp.begin();
-        yarp_iter != fn_yarp.end(); yarp_iter++) {
-        f_out_ << yarp_iter->second << endl;
-      }
-      f_out_ << "</ul>" << endl;
+      //for (map<string,string>::iterator yarp_iter = fn_yarp.begin();
+      //yarp_iter != fn_yarp.end(); yarp_iter++) {
+      //f_out_ << yarp_iter->second << endl;
+      //}
     }
   }
-  f_out_ << "</td>" << endl << "<td>";
-  map<string,string> data_types;
+  //map<string,string> data_types;
   if (!tprog->get_enums().empty()) {
     vector<t_enum*> enums = tprog->get_enums();
     vector<t_enum*>::iterator en_iter;
     for (en_iter = enums.begin(); en_iter != enums.end(); ++en_iter) {
       string name = (*en_iter)->get_name();
-      // f_out_ << "<a href=\"" << fname << "#Enum_" << name << "\">" << name
-      // <<  "</a><br/>" << endl;
-      string yarp = "<a href=\"" + fname + "#Enum_" + name + "\">" + name +
-        "</a>";
-      data_types.insert(pair<string,string>(name, yarp));
+      f_out_ << "//  enum: " << name << endl;
+      //data_types.insert(pair<string,string>(name, yarp));
     }
   }
   if (!tprog->get_typedefs().empty()) {
@@ -163,11 +335,9 @@ void t_yarp_generator::generate_program_toc_row(t_program* tprog) {
     vector<t_typedef*>::iterator td_iter;
     for (td_iter = typedefs.begin(); td_iter != typedefs.end(); ++td_iter) {
       string name = (*td_iter)->get_symbolic();
-      // f_out_ << "<a href=\"" << fname << "#Typedef_" << name << "\">" << name
-      // << "</a><br/>" << endl;
-      string yarp = "<a href=\"" + fname + "#Typedef_" + name + "\">" + name +
-        "</a>";
-      data_types.insert(pair<string,string>(name, yarp));
+      //printf("//  %s (typedef)\n", name.c_str());
+      f_out_ << "//  typedef: " << name << endl;
+      //data_types.insert(pair<string,string>(name, yarp));
     }
   }
   if (!tprog->get_objects().empty()) {
@@ -175,34 +345,30 @@ void t_yarp_generator::generate_program_toc_row(t_program* tprog) {
     vector<t_struct*>::iterator o_iter;
     for (o_iter = objects.begin(); o_iter != objects.end(); ++o_iter) {
       string name = (*o_iter)->get_name();
-      //f_out_ << "<a href=\"" << fname << "#Struct_" << name << "\">" << name
-      //<< "</a><br/>" << endl;
-      string yarp = "<a href=\"" + fname + "#Struct_" + name + "\">" + name +
-        "</a>";
-      data_types.insert(pair<string,string>(name, yarp));
+      f_out_ << "//  object: " << name << endl;
+      //data_types.insert(pair<string,string>(name, yarp));
     }
   }
-  for (map<string,string>::iterator dt_iter = data_types.begin();
-       dt_iter != data_types.end(); dt_iter++) {
-    f_out_ << dt_iter->second << "<br/>" << endl;
-  }
-  f_out_ << "</td>" << endl << "<td><code>";
+  //for (map<string,string>::iterator dt_iter = data_types.begin();
+  //dt_iter != data_types.end(); dt_iter++) {
+  //printf("//  ... %s ...\n", dt_iter->second.c_str());
+  //}
   if (!tprog->get_consts().empty()) {
-    map<string,string> const_yarp;
+    //map<string,string> const_yarp;
     vector<t_const*> consts = tprog->get_consts();
     vector<t_const*>::iterator con_iter;
     for (con_iter = consts.begin(); con_iter != consts.end(); ++con_iter) {
       string name = (*con_iter)->get_name();
-      string yarp ="<a href=\"" + fname + "#Const_" + name +
-        "\">" + name + "</a>";
-      const_yarp.insert(pair<string,string>(name, yarp));
+      f_out_ << "//  constant: " << name << endl;
+      //string yarp ="<a href=\"" + fname + "#Const_" + name +
+      //"\">" + name + "</a>";
+      //const_yarp.insert(pair<string,string>(name, yarp));
     }
-    for (map<string,string>::iterator con_iter = const_yarp.begin();
-   con_iter != const_yarp.end(); con_iter++) {
-      f_out_ << con_iter->second << "<br/>" << endl;
-    }
+    //for (map<string,string>::iterator con_iter = const_yarp.begin();
+    //con_iter != const_yarp.end(); con_iter++) {
+    //printf("//  ... %s ...\n", con_iter->second.c_str());
+    //}
   }
-  f_out_ << "</code></td>" << endl << "</tr>";
 }
 
 /**
@@ -212,35 +378,23 @@ void t_yarp_generator::generate_program_toc_row(t_program* tprog) {
 void t_yarp_generator::generate_program() {
   // Make output directory
   MKDIR(get_out_dir().c_str());
-  string fname = get_out_dir() + program_->get_name() + ".html";
+  string fname = get_out_dir() + program_->get_name() + ".cpp";
   f_out_.open(fname.c_str());
-  f_out_ << "<!DOCTYPE yarp PUBLIC \"-//W3C//DTD XHTML 1.0 Strict//EN\"" << endl;
-  f_out_ << "    \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd\">" << endl;
-  f_out_ << "<yarp xmlns=\"http://www.w3.org/1999/xhtml\">" << endl;
-  f_out_ << "<head>" << endl;
-  f_out_ << "<meta http-equiv=\"Content-Type\" content=\"text/yarp;charset=utf-8\" />" << endl;
-  f_out_ << "<link href=\"style.css\" rel=\"stylesheet\" type=\"text/css\"/>"
-   << endl;
-  f_out_ << "<title>Thrift module: " << program_->get_name()
-   << "</title></head><body>" << endl << "<h1>Thrift module: "
-   << program_->get_name() << "</h1>" << endl;
+  f_out_ << "// Thrift module: " << program_->get_name() << endl;
 
-  print_doc(program_);
+  //print_doc(program_);
 
-  generate_program_toc();
+  //generate_program_toc();
 
   if (!program_->get_consts().empty()) {
-    f_out_ << "<hr/><h2 id=\"Constants\">Constants</h2>" << endl;
+    f_out_ << endl << "// Constants" << endl;
     vector<t_const*> consts = program_->get_consts();
-    f_out_ << "<table>";
-    f_out_ << "<tr><th>Constant</th><th>Type</th><th>Value</th></tr>" << endl;
     generate_consts(consts);
-    f_out_ << "</table>";
   }
 
   if (!program_->get_enums().empty()) {
-    f_out_ << "<hr/><h2 id=\"Enumerations\">Enumerations</h2>" << endl;
     // Generate enums
+    f_out_ << endl << "// Enums" << endl;
     vector<t_enum*> enums = program_->get_enums();
     vector<t_enum*>::iterator en_iter;
     for (en_iter = enums.begin(); en_iter != enums.end(); ++en_iter) {
@@ -249,8 +403,8 @@ void t_yarp_generator::generate_program() {
   }
 
   if (!program_->get_typedefs().empty()) {
-    f_out_ << "<hr/><h2 id=\"Typedefs\">Type declarations</h2>" << endl;
     // Generate typedefs
+    f_out_ << endl << "// Typedefs" << endl;
     vector<t_typedef*> typedefs = program_->get_typedefs();
     vector<t_typedef*>::iterator td_iter;
     for (td_iter = typedefs.begin(); td_iter != typedefs.end(); ++td_iter) {
@@ -259,8 +413,8 @@ void t_yarp_generator::generate_program() {
   }
 
   if (!program_->get_objects().empty()) {
-    f_out_ << "<hr/><h2 id=\"Structs\">Data structures</h2>" << endl;
     // Generate structs and exceptions in declared order
+    f_out_ << endl << "// Structures" << endl;
     vector<t_struct*> objects = program_->get_objects();
     vector<t_struct*>::iterator o_iter;
     for (o_iter = objects.begin(); o_iter != objects.end(); ++o_iter) {
@@ -273,8 +427,8 @@ void t_yarp_generator::generate_program() {
   }
 
   if (!program_->get_services().empty()) {
-    f_out_ << "<hr/><h2 id=\"Services\">Services</h2>" << endl;
     // Generate services
+    f_out_ << endl << "// Services" << endl;
     vector<t_service*> services = program_->get_services();
     vector<t_service*>::iterator sv_iter;
     for (sv_iter = services.begin(); sv_iter != services.end(); ++sv_iter) {
@@ -283,54 +437,19 @@ void t_yarp_generator::generate_program() {
     }
   }
 
-  f_out_ << "</body></yarp>" << endl;
   f_out_.close();
 
   generate_index();
-  generate_css();
 }
 
 /**
  * Emits the index.html file for the recursive set of Thrift programs
  */
 void t_yarp_generator::generate_index() {
-  string index_fname = get_out_dir() + "index.html";
+  string index_fname = get_out_dir() + "index.cpp";
   f_out_.open(index_fname.c_str());
-  f_out_ << "<yarp><head>" << endl;
-  f_out_ << "<link href=\"style.css\" rel=\"stylesheet\" type=\"text/css\"/>"
-   << endl;
-  f_out_ << "<title>All Thrift declarations</title></head><body>"
-   << endl << "<h1>All Thrift declarations</h1>" << endl;
-  f_out_ << "<table><tr><th>Module</th><th>Services</th><th>Data types</th>"
-   << "<th>Constants</th></tr>" << endl;
   vector<t_program*> programs;
   generate_program_toc_rows(program_, programs);
-  f_out_ << "</table>" << endl;
-  f_out_ << "</body></yarp>" << endl;
-  f_out_.close();
-}
-
-void t_yarp_generator::generate_css() {
-  string css_fname = get_out_dir() + "style.css";
-  f_out_.open(css_fname.c_str());
-  f_out_ << "/* Auto-generated CSS for generated Thrift docs */" << endl;
-  f_out_ <<
-    "body { font-family: Tahoma, sans-serif; }" << endl;
-  f_out_ <<
-    "pre { background-color: #dddddd; padding: 6px; }" << endl;
-  f_out_ <<
-    "h3,h4 { padding-top: 0px; margin-top: 0px; }" << endl;
-  f_out_ <<
-    "div.definition { border: 1px solid gray; margin: 10px; padding: 10px; }" << endl;
-  f_out_ <<
-    "div.extends { margin: -0.5em 0 1em 5em }" << endl;
-  f_out_ <<
-    "table { border: 1px solid grey; border-collapse: collapse; }" << endl;
-  f_out_ <<
-    "td { border: 1px solid grey; padding: 1px 6px; vertical-align: top; }" << endl;
-  f_out_ <<
-    "th { border: 1px solid black; background-color: #bbbbbb;" << endl <<
-    "     text-align: left; padding: 1px 6px; }" << endl;
   f_out_.close();
 }
 
@@ -361,102 +480,94 @@ void t_yarp_generator::print_doc(t_doc* tdoc) {
 /**
  * Prints out the provided type in YARP
  */
-int t_yarp_generator::print_type(t_type* ttype) {
-  int len = 0;
-  f_out_ << "<code>";
+string t_yarp_generator::print_type(t_type* ttype) {
+  return type_name(ttype);
+
+  // OLD
+  string result;
   if (ttype->is_container()) {
     if (ttype->is_list()) {
-      f_out_ << "list&lt;";
-      len = 6 + print_type(((t_list*)ttype)->get_elem_type());
-      f_out_ << "&gt;";
+      result += "list<";
+      result += print_type(((t_list*)ttype)->get_elem_type());
+      result += ">";
     } else if (ttype->is_set()) {
-      f_out_ << "set&lt;";
-      len = 5 + print_type(((t_set*)ttype)->get_elem_type());
-      f_out_ << "&gt;";
+      result += "set<";
+      result += print_type(((t_set*)ttype)->get_elem_type());
+      result += ">";
     } else if (ttype->is_map()) {
-      f_out_ << "map&lt;";
-      len = 5 + print_type(((t_map*)ttype)->get_key_type());
-      f_out_ << ", ";
-      len += print_type(((t_map*)ttype)->get_val_type());
-      f_out_ << "&gt;";
+      result += "map<";
+      result += print_type(((t_map*)ttype)->get_key_type());
+      result += ", ";
+      result += print_type(((t_map*)ttype)->get_val_type());
+      result += ">";
     }
   } else if (ttype->is_base_type()) {
-    f_out_ << (((t_base_type*)ttype)->is_binary() ? "binary" : ttype->get_name());
-    len = ttype->get_name().size();
+    result += (((t_base_type*)ttype)->is_binary() ? "binary" : ttype->get_name());
   } else {
     string prog_name = ttype->get_program()->get_name();
     string type_name = ttype->get_name();
-    f_out_ << "<a href=\"" << prog_name << ".html#";
-    if (ttype->is_typedef()) {
-      f_out_ << "Typedef_";
-    } else if (ttype->is_struct() || ttype->is_xception()) {
-      f_out_ << "Struct_";
-    } else if (ttype->is_enum()) {
-      f_out_ << "Enum_";
-    } else if (ttype->is_service()) {
-      f_out_ << "Svc_";
-    }
-    f_out_ << type_name << "\">";
-    len = type_name.size();
     if (ttype->get_program() != program_) {
-      f_out_ << prog_name << ".";
-      len += prog_name.size() + 1;
+      result += prog_name;
+      result += ".";
     }
-    f_out_ << type_name << "</a>";
+    result += type_name;
   }
-  f_out_ << "</code>";
-  return len;
+  return result;
 }
 
 /**
  * Prints out an YARP representation of the provided constant value
  */
-void t_yarp_generator::print_const_value(t_const_value* tvalue) {
+string t_yarp_generator::print_const_value(t_const_value* tvalue) {
+  string result;
   bool first = true;
+  char buf[10000];
   switch (tvalue->get_type()) {
   case t_const_value::CV_INTEGER:
-    f_out_ << tvalue->get_integer();
+    sprintf(buf,"%d",tvalue->get_integer());
+    result += buf;
     break;
   case t_const_value::CV_DOUBLE:
-    f_out_ << tvalue->get_double();
+    sprintf(buf,"%g",tvalue->get_double());
+    result += buf;
     break;
   case t_const_value::CV_STRING:
-    f_out_ << '"' << get_escaped_string(tvalue) << '"';
+    result += string("\"") + get_escaped_string(tvalue) + "\"";
     break;
   case t_const_value::CV_MAP:
     {
-      f_out_ << "{ ";
+      result += "{ ";
       map<t_const_value*, t_const_value*> map_elems = tvalue->get_map();
       map<t_const_value*, t_const_value*>::iterator map_iter;
       for (map_iter = map_elems.begin(); map_iter != map_elems.end(); map_iter++) {
         if (!first) {
-          f_out_ << ", ";
+          result += ", ";
         }
         first = false;
-        print_const_value(map_iter->first);
-        f_out_ << " = ";
-        print_const_value(map_iter->second);
+        result += print_const_value(map_iter->first);
+        result += " = ";
+        result += print_const_value(map_iter->second);
       }
-      f_out_ << " }";
+      result += " }";
     }
     break;
   case t_const_value::CV_LIST:
     {
-      f_out_ << "{ ";
+      result += "{ ";
       vector<t_const_value*> list_elems = tvalue->get_list();;
       vector<t_const_value*>::iterator list_iter;
       for (list_iter = list_elems.begin(); list_iter != list_elems.end(); list_iter++) {
         if (!first) {
-          f_out_ << ", ";
+          result += ", ";
         }
         first = false;
-        print_const_value(*list_iter);
+        result += print_const_value(*list_iter);
       }
-      f_out_ << " }";
+      result += " }";
     }
     break;
   default:
-    f_out_ << "UNKNOWN";
+    result += "UNKNOWN";
     break;
   }
 }
@@ -527,28 +638,42 @@ void t_yarp_generator::generate_const(t_const* tconst) {
  */
 void t_yarp_generator::generate_struct(t_struct* tstruct) {
   string name = tstruct->get_name();
-  f_out_ << "<div class=\"definition\">";
-  f_out_ << "<h3 id=\"Struct_" << name << "\">";
-  if (tstruct->is_xception()) {
-    f_out_ << "Exception: ";
-  } else {
-    f_out_ << "Struct: ";
-  }
-  f_out_ << name << "</h3>" << endl;
+  bool except = tstruct->is_xception();
   vector<t_field*> members = tstruct->get_members();
   vector<t_field*>::iterator mem_iter = members.begin();
 
-  f_out_ << "<pre>";
   f_out_ << "class " << name << " : public yarp::os::Portable {" << endl;
+  f_out_ << "public:" << endl;
 
   for ( ; mem_iter != members.end(); mem_iter++) {
-    f_out_ << "  // " << (*mem_iter)->get_name() << ";" << endl;
+    string mname = (*mem_iter)->get_name();
+    string mtype = print_type((*mem_iter)->get_type());
+    f_out_ << "    " << mtype << " " << mname << ";" << endl; 
   }
   mem_iter = members.begin();
 
-  f_out_ << "};" << endl;
-  f_out_ << "</pre>";
+  f_out_ << "    bool read(yarp::os::ConnectionReader& connection) {" << endl;
+  for ( ; mem_iter != members.end(); mem_iter++) {
+    string mname = (*mem_iter)->get_name();
+    string mtype = print_type((*mem_iter)->get_type());
+    f_out_ << "        // read: " << mtype << " " << mname << ";" << endl; 
+  }
+  f_out_ << "    }" << endl;
+  mem_iter = members.begin();
 
+
+  f_out_ << "    bool write(yarp::os::ConnectionWriter& connection) {" << endl;
+  for ( ; mem_iter != members.end(); mem_iter++) {
+    string mname = (*mem_iter)->get_name();
+    string mtype = print_type((*mem_iter)->get_type());
+    f_out_ << "        // write: " << mtype << " " << mname << ";" << endl; 
+  }
+  f_out_ << "    }" << endl;
+  mem_iter = members.begin();
+
+  f_out_ << "};" << endl;
+
+  /*
   f_out_ << "<table>";
   f_out_ << "<tr><th>Key</th><th>Field</th><th>Type</th><th>Description</th><th>Requiredness</th><th>Default value</th></tr>"
     << endl;
@@ -577,6 +702,7 @@ void t_yarp_generator::generate_struct(t_struct* tstruct) {
   f_out_ << "</table><br/>";
   print_doc(tstruct);
   f_out_ << "</div>";
+  */
 }
 
 /**
@@ -588,39 +714,130 @@ void t_yarp_generator::generate_xception(t_struct* txception) {
   generate_struct(txception);
 }
 
+
+std::string t_yarp_generator::function_prototype(t_function *tfn) {
+  string result = "";
+  t_function **fn_iter = &tfn;
+  string fn_name = (*fn_iter)->get_name();
+  string return_type = print_type((*fn_iter)->get_returntype());
+  result += return_type;
+  result += string(" ") + fn_name + "(";
+  bool first = true;
+  vector<t_field*> args = (*fn_iter)->get_arglist()->get_members();
+  vector<t_field*>::iterator arg_iter = args.begin();
+  if (arg_iter != args.end()) {
+    for ( ; arg_iter != args.end(); arg_iter++) {
+      if (!first) {
+	result += ", ";
+      }
+      first = false;
+      result += type_name((*arg_iter)->get_type(),false,true);
+      result += string(" ") + (*arg_iter)->get_name();
+      if ((*arg_iter)->get_value() != NULL) {
+	result += " = ";
+        result += print_const_value((*arg_iter)->get_value());
+      }
+    }
+  }
+  result += ")";
+  return result;
+}
+
 /**
  * Generates the YARP block for a Thrift service.
  *
  * @param tservice The service definition
  */
 void t_yarp_generator::generate_service(t_service* tservice) {
-  f_out_ << "<h3 id=\"Svc_" << service_name_ << "\">Service: "
-    << service_name_ << "</h3>" << endl;
-
-
   {
-    f_out_ << "<pre>" << endl;
     f_out_ << "class " << service_name_ << " {" << endl;
+    f_out_ << "public:" << endl;
+    vector<t_function*> functions = tservice->get_functions();
+    vector<t_function*>::iterator fn_iter = functions.begin();
+    for ( ; fn_iter != functions.end(); fn_iter++) {
+      f_out_ << "    virtual " << function_prototype(*fn_iter) 
+	     << " = 0;" << endl;
+    }
+    f_out_ << "};" << endl;
+  }
+  
+  {
+    f_out_ << "class " << service_name_ << "Client : public " << service_name_ << ", public yarp::os::Client {" << endl;
+    f_out_ << "public:" << endl;
 
     vector<t_function*> functions = tservice->get_functions();
     vector<t_function*>::iterator fn_iter = functions.begin();
     for ( ; fn_iter != functions.end(); fn_iter++) {
-      string fn_name = (*fn_iter)->get_name();
-      f_out_ << "  // " << fn_name << endl;
+      f_out_ << "    virtual " << function_prototype(*fn_iter);
+      f_out_ << " {" << endl;
+      f_out_ << "        yarp::os::ConnectionWriter& writer = getWriter();" << endl;
+      f_out_ << "        // proxy action" << endl;
+      if ((*fn_iter)->is_oneway()) {
+	f_out_ << "        // (one way)" << endl;
+      }
+      f_out_ << "    }" << endl;
     }
-
-
     f_out_ << "};" << endl;
-    f_out_ << "</pre>" << endl;
+  }
+
+  {
+    f_out_ << "class " << service_name_ << "Server : public " << service_name_ << ", public yarp::os::PortReader {" << endl;
+    f_out_ << "public:" << endl;
+    f_out_ << "    " << service_name_ << " *impl;" << endl;
+    f_out_ << "    " << service_name_ << "Server() { impl = 0/*NULL*/; }" << endl;
+
+    vector<t_function*> functions = tservice->get_functions();
+    vector<t_function*>::iterator fn_iter = functions.begin();
+    for ( ; fn_iter != functions.end(); fn_iter++) {
+      f_out_ << "    virtual " << function_prototype(*fn_iter);
+      f_out_ << " {" << endl;
+      f_out_ << "        ";
+      //f_out_ << "if (impl) ";
+      if (!(*fn_iter)->get_returntype()->is_void()) {
+	f_out_ << "return ";
+      }
+      f_out_ << "impl->" + (*fn_iter)->get_name() << "(";
+      bool first = true;
+      vector<t_field*> args = (*fn_iter)->get_arglist()->get_members();
+      vector<t_field*>::iterator arg_iter = args.begin();
+      if (arg_iter != args.end()) {
+	for ( ; arg_iter != args.end(); arg_iter++) {
+	  if (!first) {
+	    f_out_ << ",";
+	  }
+	  first = false;
+	  f_out_ << (*arg_iter)->get_name();
+	}
+      }
+      f_out_ << ");" << endl;
+      f_out_ << "    }" << endl;
+    }
+    f_out_ << "    virtual bool read(yarp::os::ConnectionReader& reader) {" << endl;
+    f_out_ << "        int tag = reader.expectInt();" << endl;
+    f_out_ << "        if reader.isError() return false;" << endl;
+    f_out_ << "        switch (tag) {" << endl;
+    fn_iter = functions.begin();
+    for ( ; fn_iter != functions.end(); fn_iter++) {
+      f_out_ << "        case ...:" << endl;
+      f_out_ << "            // " << (*fn_iter)->get_name() << endl;
+      f_out_ << "            break;" << endl;
+    }
+    f_out_ << "        }" << endl;
+    f_out_ << "        return false;" << endl;
+    f_out_ << "    }" << endl;
+    f_out_ << "};" << endl;
   }
 
 
-  if (tservice->get_extends()) {
-    f_out_ << "<div class=\"extends\"><em>extends</em> ";
-    print_type(tservice->get_extends());
-    f_out_ << "</div>\n";
-  }
-  print_doc(tservice);
+
+  //if (tservice->get_extends()) {
+  //f_out_ << "<div class=\"extends\"><em>extends</em> ";
+  //print_type(tservice->get_extends());
+  //f_out_ << "</div>\n";
+  //}
+  //print_doc(tservice);
+
+  /*
   vector<t_function*> functions = tservice->get_functions();
   vector<t_function*>::iterator fn_iter = functions.begin();
   for ( ; fn_iter != functions.end(); fn_iter++) {
@@ -672,6 +889,7 @@ void t_yarp_generator::generate_service(t_service* tservice) {
     print_doc(*fn_iter);
     f_out_ << "</div>";
   }
+  */
 }
 
 THRIFT_REGISTER_GENERATOR(yarp, "YARP", "")
