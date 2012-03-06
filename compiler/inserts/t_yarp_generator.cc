@@ -80,6 +80,8 @@ class t_yarp_generator : public t_oop_generator {
 
   std::string function_prototype(t_function *tfn);
 
+  std::string declare_field(t_field* tfield, bool init=false, bool pointer=false, bool constant=false, bool reference=false);
+
   std::string type_name(t_type* ttype, bool in_typedef=false, bool arg=false);
   std::string base_type_name(t_base_type::t_base tbase);
   std::string namespace_prefix(std::string ns);
@@ -124,6 +126,35 @@ class t_yarp_generator : public t_oop_generator {
                                           string target,
                                           string iface,
                                           string arg_prefix);
+
+
+
+  void generate_deserialize_field        (std::ofstream& out,
+                                          t_field*    tfield,
+                                          std::string prefix="",
+                                          std::string suffix="");
+
+  void generate_deserialize_struct       (std::ofstream& out,
+                                          t_struct*   tstruct,
+                                          std::string prefix="");
+
+  void generate_deserialize_container    (std::ofstream& out,
+                                          t_type*     ttype,
+                                          std::string prefix="");
+
+  void generate_deserialize_set_element  (std::ofstream& out,
+                                          t_set*      tset,
+                                          std::string prefix="");
+
+  void generate_deserialize_map_element  (std::ofstream& out,
+                                          t_map*      tmap,
+                                          std::string prefix="");
+
+  void generate_deserialize_list_element (std::ofstream& out,
+                                          t_list*     tlist,
+                                          std::string prefix,
+                                          bool push_back,
+                                          std::string index);
 
   std::string type_to_enum(t_type* ttype);
 
@@ -728,11 +759,18 @@ void t_yarp_generator::generate_struct(t_struct* tstruct) {
   indent(f_out_) << "bool read(yarp::os::ConnectionReader& connection) {" 
 		 << endl;
   indent_up();
+  indent(f_out_) << "yarp::os::ReaderHelper helper(connection);" 
+		 << endl;
   for ( ; mem_iter != members.end(); mem_iter++) {
     string mname = (*mem_iter)->get_name();
     string mtype = print_type((*mem_iter)->get_type());
-    indent(f_out_) << "// read: " << mtype << " " << mname << ";" << endl; 
+    //indent(f_out_) << "// read: " << mtype << " " << mname << ";" << endl; 
+    indent(f_out_) << "if (!";
+    generate_deserialize_field(f_out_, *mem_iter, "this->");
+    f_out_ << ") return false;" << endl;
   }
+  indent(f_out_) << "return helper.result();" 
+		 << endl;
   indent_down();
   indent(f_out_) << "}" << endl;
   mem_iter = members.begin();
@@ -741,12 +779,19 @@ void t_yarp_generator::generate_struct(t_struct* tstruct) {
   indent(f_out_) << "bool write(yarp::os::ConnectionWriter& connection) {" 
 		 << endl;
   indent_up();
+  indent(f_out_) << "yarp::os::WriterHelper helper(connection);" 
+		 << endl;
   for ( ; mem_iter != members.end(); mem_iter++) {
     string mname = (*mem_iter)->get_name();
     string mtype = print_type((*mem_iter)->get_type());
-    indent(f_out_) << "// write: " << mtype << " " << mname << ";" << endl; 
+    //indent(f_out_) << "// write: " << mtype << " " << mname << ";" << endl; 
+    indent(f_out_) << "if (!";
     generate_serialize_field(f_out_, *mem_iter, "this->");
+    f_out_ << ") return false;" << endl;
+    //generate_serialize_field(f_out_, *mem_iter, "this->");
   }
+  indent(f_out_) << "return helper.result();" 
+		 << endl;
   indent_down();
   indent(f_out_) << "}" << endl;
   mem_iter = members.begin();
@@ -789,6 +834,106 @@ std::string t_yarp_generator::function_prototype(t_function *tfn) {
 }
 
 void t_yarp_generator::generate_service(t_service* tservice) {
+  {
+    f_out_ << "class " << service_name_ << " : public yarp::os::PortReader {" << endl;
+    f_out_ << "private:" << endl;
+    indent_up();
+    indent(f_out_) << "yarp::os::Contactable *port;" << endl;
+    indent_down();
+    f_out_ << "public:" << endl;
+    indent_up();
+    indent(f_out_) << service_name_ 
+		   << "() { port = 0/*NULL*/; mode = 0; }" << endl;
+    indent(f_out_) << "bool attachPort(yarp::os::Contactable& port) {" << endl;
+    indent_up();
+    indent(f_out_) << "this->port = &port;" << endl;
+    indent(f_out_) << "port.setReader(this);" << endl;
+    indent(f_out_) << "return true;" << endl;
+    indent_down();
+    indent(f_out_) << "}" << endl;
+    vector<t_function*> functions = tservice->get_functions();
+    vector<t_function*>::iterator fn_iter = functions.begin();
+    for ( ; fn_iter != functions.end(); fn_iter++) {
+      indent(f_out_) << "virtual " << function_prototype(*fn_iter) 
+		     << " {" << endl;
+      indent_up();
+
+      t_type* returntype = (*fn_iter)->get_returntype();
+      t_field returnfield(returntype, "_return");
+      if (!returntype->is_void()) {
+	indent(f_out_) << declare_field(&returnfield, true) << endl;
+      }
+      indent(f_out_) << "if (!port) ";
+      if (returntype->is_void() || is_complex_type(returntype)) {
+        f_out_ << "return;" << endl;
+      } else {
+	f_out_ << "return _return;" << endl;
+      }
+      //indent_down();
+      //indent(f_out_) << "}" << endl;
+      indent(f_out_) << "yarp::os::RpcHelper helper(*port);" << endl;
+      indent(f_out_) << "bool ok = true;" << endl;
+      vector<t_field*> args = (*fn_iter)->get_arglist()->get_members();
+      vector<t_field*>::iterator arg_iter = args.begin();
+      if (arg_iter != args.end()) {
+	for ( ; arg_iter != args.end(); arg_iter++) {
+	  indent(f_out_) << "ok = ok && ";
+	  generate_serialize_field(f_out_, *arg_iter, "");
+	  f_out_ << ";" << endl;
+	}
+      }
+      indent(f_out_) << "if (ok) ok = helper.apply();" << endl;
+      if (!returntype->is_void()) {
+	indent(f_out_) << "if (!ok) ";
+	if (returntype->is_void() || is_complex_type(returntype)) {
+	  f_out_ << "return;" << endl;
+	} else {
+	  f_out_ << "return _return;" << endl;
+	}
+	indent(f_out_) << "";
+	generate_deserialize_field(f_out_, &returnfield, "");
+	f_out_ << ";" << endl;
+	if (returntype->is_void() || is_complex_type(returntype)) {
+	  indent(f_out_) << "return;" << endl;
+	} else {
+	  indent(f_out_) << "return _return;" << endl;
+	}
+      }
+
+      indent_down();
+      indent(f_out_) << "}" << endl;
+    }
+
+
+    indent(f_out_) << "virtual bool read(yarp::os::ConnectionReader& reader) {"
+		   << endl;
+    indent_up();
+    indent(f_out_) << "int tag = reader.expectInt();" << endl;
+    indent(f_out_) << "if reader.isError() return false;" << endl;
+    indent(f_out_) << "switch (tag) {" << endl;
+    indent_up();
+    fn_iter = functions.begin();
+    for ( ; fn_iter != functions.end(); fn_iter++) {
+      indent(f_out_) << "case ...:" << endl;
+      indent_up();
+      indent(f_out_) << "// " << (*fn_iter)->get_name() << endl;
+      indent(f_out_) << "break;" << endl;
+      indent_down();
+    }
+    indent_down();
+    indent(f_out_) << "}" << endl;
+    indent(f_out_) << "return false;" << endl;
+    indent_down();
+    indent(f_out_) << "}" << endl;
+
+
+    indent_down();
+    f_out_ << "};" << endl
+	   << endl;
+  }
+
+
+  /*
   {
     f_out_ << "class " << service_name_ << " {" << endl;
     f_out_ << "public:" << endl;
@@ -835,7 +980,7 @@ void t_yarp_generator::generate_service(t_service* tservice) {
     indent_up();
     indent(f_out_) << service_name_ << " *impl;" << endl;
     indent(f_out_) << service_name_ 
-		   << "Server() { impl = 0/*NULL*/; }" << endl;
+		   << "Server() { impl = 0; }" << endl;
 
     vector<t_function*> functions = tservice->get_functions();
     vector<t_function*>::iterator fn_iter = functions.begin();
@@ -887,69 +1032,7 @@ void t_yarp_generator::generate_service(t_service* tservice) {
     indent_down();
     f_out_ << "};" << endl;
   }
-
-
-
-  //if (tservice->get_extends()) {
-  //f_out_ << "<div class=\"extends\"><em>extends</em> ";
-  //print_type(tservice->get_extends());
-  //f_out_ << "</div>\n";
-  //}
-  //print_doc(tservice);
-
-  /*
-  vector<t_function*> functions = tservice->get_functions();
-  vector<t_function*>::iterator fn_iter = functions.begin();
-  for ( ; fn_iter != functions.end(); fn_iter++) {
-    string fn_name = (*fn_iter)->get_name();
-    f_out_ << "<div class=\"definition\">";
-    f_out_ << "<h4 id=\"Fn_" << service_name_ << "_" << fn_name
-      << "\">Function: " << service_name_ << "." << fn_name
-      << "</h4>" << endl;
-    f_out_ << "<pre>";
-    int offset = print_type((*fn_iter)->get_returntype());
-    bool first = true;
-    f_out_ << " " << fn_name << "(";
-    offset += fn_name.size() + 2;
-    vector<t_field*> args = (*fn_iter)->get_arglist()->get_members();
-    vector<t_field*>::iterator arg_iter = args.begin();
-    if (arg_iter != args.end()) {
-      for ( ; arg_iter != args.end(); arg_iter++) {
-        if (!first) {
-          f_out_ << "," << endl;
-          for (int i = 0; i < offset; ++i) {
-            f_out_ << " ";
-          }
-        }
-        first = false;
-        print_type((*arg_iter)->get_type());
-        f_out_ << " " << (*arg_iter)->get_name();
-        if ((*arg_iter)->get_value() != NULL) {
-          f_out_ << " = ";
-          print_const_value((*arg_iter)->get_value());
-        }
-      }
-    }
-    f_out_ << ")" << endl;
-    first = true;
-    vector<t_field*> excepts = (*fn_iter)->get_xceptions()->get_members();
-    vector<t_field*>::iterator ex_iter = excepts.begin();
-    if (ex_iter != excepts.end()) {
-      f_out_ << "    throws ";
-      for ( ; ex_iter != excepts.end(); ex_iter++) {
-        if (!first) {
-          f_out_ << ", ";
-        }
-        first = false;
-        print_type((*ex_iter)->get_type());
-      }
-      f_out_ << endl;
-    }
-    f_out_ << "</pre>";
-    print_doc(*fn_iter);
-    f_out_ << "</div>";
-  }
-  */
+*/
 }
 
 
@@ -974,8 +1057,8 @@ void t_yarp_generator::generate_serialize_field(ofstream& out,
     generate_serialize_container(out, type, name);
   } else if (type->is_base_type() || type->is_enum()) {
 
-    indent(out) <<
-      "xfer += oprot->";
+    out <<
+      "helper.";
 
     if (type->is_base_type()) {
       t_base_type::t_base tbase = ((t_base_type*)type)->get_base();
@@ -986,37 +1069,36 @@ void t_yarp_generator::generate_serialize_field(ofstream& out,
         break;
       case t_base_type::TYPE_STRING:
         if (((t_base_type*)type)->is_binary()) {
-          out << "writeBinary(" << name << ");";
+          out << "writeBinary(" << name << ")";
         }
         else {
-          out << "writeString(" << name << ");";
+          out << "writeString(" << name << ")";
         }
         break;
       case t_base_type::TYPE_BOOL:
-        out << "writeBool(" << name << ");";
+        out << "writeBool(" << name << ")";
         break;
       case t_base_type::TYPE_BYTE:
-        out << "writeByte(" << name << ");";
+        out << "writeByte(" << name << ")";
         break;
       case t_base_type::TYPE_I16:
-        out << "writeI16(" << name << ");";
+        out << "writeI16(" << name << ")";
         break;
       case t_base_type::TYPE_I32:
-        out << "writeI32(" << name << ");";
+        out << "writeI32(" << name << ")";
         break;
       case t_base_type::TYPE_I64:
-        out << "writeI64(" << name << ");";
+        out << "writeI64(" << name << ")";
         break;
       case t_base_type::TYPE_DOUBLE:
-        out << "writeDouble(" << name << ");";
+        out << "writeDouble(" << name << ")";
         break;
       default:
         throw "compiler error: no C++ writer for base type " + t_base_type::t_base_name(tbase) + name;
       }
     } else if (type->is_enum()) {
-      out << "writeI32((int32_t)" << name << ");";
+      out << "writeI32((int32_t)" << name << ")";
     }
-    out << endl;
   } else {
     printf("DO NOT KNOW HOW TO SERIALIZE FIELD '%s' TYPE '%s'\n",
            name.c_str(),
@@ -1028,9 +1110,7 @@ void t_yarp_generator::generate_serialize_field(ofstream& out,
 void t_yarp_generator::generate_serialize_struct(ofstream& out,
 						 t_struct* tstruct,
 						 string prefix) {
-  (void) tstruct;
-  indent(out) <<
-    "xfer += " << prefix << ".write(oprot);" << endl;
+  out << "helper.write(" << prefix << ")";
 }
 
 void t_yarp_generator::generate_serialize_container(ofstream& out,
@@ -1107,6 +1187,256 @@ void t_yarp_generator::generate_serialize_list_element(ofstream& out,
   t_field efield(tlist->get_elem_type(), "(*" + iter + ")");
   generate_serialize_field(out, &efield, "");
 }
+
+
+
+
+void t_yarp_generator::generate_deserialize_field(ofstream& out,
+						  t_field* tfield,
+						  string prefix,
+						  string suffix) {
+  t_type* type = get_true_type(tfield->get_type());
+
+  if (type->is_void()) {
+    throw "CANNOT GENERATE DESERIALIZE CODE FOR void TYPE: " +
+      prefix + tfield->get_name();
+  }
+
+  string name = prefix + tfield->get_name() + suffix;
+
+  if (type->is_struct() || type->is_xception()) {
+    generate_deserialize_struct(out, (t_struct*)type, name);
+  } else if (type->is_container()) {
+    generate_deserialize_container(out, type, name);
+  } else if (type->is_base_type()) {
+    out <<
+      "helper.";
+    t_base_type::t_base tbase = ((t_base_type*)type)->get_base();
+    switch (tbase) {
+    case t_base_type::TYPE_VOID:
+      throw "compiler error: cannot serialize void field in a struct: " + name;
+      break;
+    case t_base_type::TYPE_STRING:
+      if (((t_base_type*)type)->is_binary()) {
+        out << "readBinary(" << name << ")";
+      }
+      else {
+        out << "readString(" << name << ")";
+      }
+      break;
+    case t_base_type::TYPE_BOOL:
+      out << "readBool(" << name << ")";
+      break;
+    case t_base_type::TYPE_BYTE:
+      out << "readByte(" << name << ")";
+      break;
+    case t_base_type::TYPE_I16:
+      out << "readI16(" << name << ")";
+      break;
+    case t_base_type::TYPE_I32:
+      out << "readI32(" << name << ")";
+      break;
+    case t_base_type::TYPE_I64:
+      out << "readI64(" << name << ")";
+      break;
+    case t_base_type::TYPE_DOUBLE:
+      out << "readDouble(" << name << ")";
+      break;
+    default:
+      throw "compiler error: no C++ reader for base type " + t_base_type::t_base_name(tbase) + name;
+    }
+  } else if (type->is_enum()) {
+    string t = tmp("ecast");
+    out <<
+      indent() << "int32_t " << t << ";" << endl <<
+      indent() << "xfer += iprot->readI32(" << t << ");" << endl <<
+      indent() << name << " = (" << type_name(type) << ")" << t << ";" << endl;
+  } else {
+    printf("DO NOT KNOW HOW TO DESERIALIZE FIELD '%s' TYPE '%s'\n",
+           tfield->get_name().c_str(), type_name(type).c_str());
+  }
+}
+
+void t_yarp_generator::generate_deserialize_struct(ofstream& out,
+						   t_struct* tstruct,
+						   string prefix) {
+  (void) tstruct;
+  indent(out) <<
+    "xfer += " << prefix << ".read(iprot);" << endl;
+}
+
+void t_yarp_generator::generate_deserialize_container(ofstream& out,
+						      t_type* ttype,
+						      string prefix) {
+  scope_up(out);
+
+  string size = tmp("_size");
+  string ktype = tmp("_ktype");
+  string vtype = tmp("_vtype");
+  string etype = tmp("_etype");
+
+  t_container* tcontainer = (t_container*)ttype;
+  bool use_push = tcontainer->has_cpp_name();
+
+  indent(out) <<
+    prefix << ".clear();" << endl <<
+    indent() << "uint32_t " << size << ";" << endl;
+
+  // Declare variables, read header
+  if (ttype->is_map()) {
+    out <<
+      indent() << "::apache::thrift::protocol::TType " << ktype << ";" << endl <<
+      indent() << "::apache::thrift::protocol::TType " << vtype << ";" << endl <<
+      indent() << "iprot->readMapBegin(" <<
+                   ktype << ", " << vtype << ", " << size << ");" << endl;
+  } else if (ttype->is_set()) {
+    out <<
+      indent() << "::apache::thrift::protocol::TType " << etype << ";" << endl <<
+      indent() << "iprot->readSetBegin(" <<
+                   etype << ", " << size << ");" << endl;
+  } else if (ttype->is_list()) {
+    out <<
+      indent() << "::apache::thrift::protocol::TType " << etype << ";" << endl <<
+      indent() << "iprot->readListBegin(" <<
+      etype << ", " << size << ");" << endl;
+    if (!use_push) {
+      indent(out) << prefix << ".resize(" << size << ");" << endl;
+    }
+  }
+
+
+  // For loop iterates over elements
+  string i = tmp("_i");
+  out <<
+    indent() << "uint32_t " << i << ";" << endl <<
+    indent() << "for (" << i << " = 0; " << i << " < " << size << "; ++" << i << ")" << endl;
+
+    scope_up(out);
+
+    if (ttype->is_map()) {
+      generate_deserialize_map_element(out, (t_map*)ttype, prefix);
+    } else if (ttype->is_set()) {
+      generate_deserialize_set_element(out, (t_set*)ttype, prefix);
+    } else if (ttype->is_list()) {
+      generate_deserialize_list_element(out, (t_list*)ttype, prefix, use_push, i);
+    }
+
+    scope_down(out);
+
+  // Read container end
+  if (ttype->is_map()) {
+    indent(out) << "iprot->readMapEnd();" << endl;
+  } else if (ttype->is_set()) {
+    indent(out) << "iprot->readSetEnd();" << endl;
+  } else if (ttype->is_list()) {
+    indent(out) << "iprot->readListEnd();" << endl;
+  }
+
+  scope_down(out);
+}
+
+
+void t_yarp_generator::generate_deserialize_map_element(ofstream& out,
+							t_map* tmap,
+							string prefix) {
+  string key = tmp("_key");
+  string val = tmp("_val");
+  t_field fkey(tmap->get_key_type(), key);
+  t_field fval(tmap->get_val_type(), val);
+
+  out <<
+    indent() << declare_field(&fkey) << endl;
+
+  generate_deserialize_field(out, &fkey);
+  indent(out) <<
+    declare_field(&fval, false, false, false, true) << " = " <<
+    prefix << "[" << key << "];" << endl;
+
+  generate_deserialize_field(out, &fval);
+}
+
+void t_yarp_generator::generate_deserialize_set_element(ofstream& out,
+							t_set* tset,
+							string prefix) {
+  string elem = tmp("_elem");
+  t_field felem(tset->get_elem_type(), elem);
+
+  indent(out) <<
+    declare_field(&felem) << endl;
+
+  generate_deserialize_field(out, &felem);
+
+  indent(out) <<
+    prefix << ".insert(" << elem << ");" << endl;
+}
+
+void t_yarp_generator::generate_deserialize_list_element(ofstream& out,
+							 t_list* tlist,
+							 string prefix,
+							 bool use_push,
+							 string index) {
+  if (use_push) {
+    string elem = tmp("_elem");
+    t_field felem(tlist->get_elem_type(), elem);
+    indent(out) << declare_field(&felem) << endl;
+    generate_deserialize_field(out, &felem);
+    indent(out) << prefix << ".push_back(" << elem << ");" << endl;
+  } else {
+    t_field felem(tlist->get_elem_type(), prefix + "[" + index + "]");
+    generate_deserialize_field(out, &felem);
+  }
+}
+
+string t_yarp_generator::declare_field(t_field* tfield, bool init, bool pointer, bool constant, bool reference) {
+  // TODO(mcslee): do we ever need to initialize the field?
+  string result = "";
+  if (constant) {
+    result += "const ";
+  }
+  result += type_name(tfield->get_type());
+  if (pointer) {
+    result += "*";
+  }
+  if (reference) {
+    result += "&";
+  }
+  result += " " + tfield->get_name();
+  if (init) {
+    t_type* type = get_true_type(tfield->get_type());
+
+    if (type->is_base_type()) {
+      t_base_type::t_base tbase = ((t_base_type*)type)->get_base();
+      switch (tbase) {
+      case t_base_type::TYPE_VOID:
+        break;
+      case t_base_type::TYPE_STRING:
+        result += " = \"\"";
+        break;
+      case t_base_type::TYPE_BOOL:
+        result += " = false";
+        break;
+      case t_base_type::TYPE_BYTE:
+      case t_base_type::TYPE_I16:
+      case t_base_type::TYPE_I32:
+      case t_base_type::TYPE_I64:
+        result += " = 0";
+        break;
+      case t_base_type::TYPE_DOUBLE:
+        result += " = (double)0";
+        break;
+      default:
+        throw "compiler error: no C++ initializer for base type " + t_base_type::t_base_name(tbase);
+      }
+    } else if (type->is_enum()) {
+      result += " = (" + type_name(type) + ")0";
+    }
+  }
+  if (!reference) {
+    result += ";";
+  }
+  return result;
+}
+
 
 
 THRIFT_REGISTER_GENERATOR(yarp, "YARP", "")
