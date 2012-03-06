@@ -481,7 +481,8 @@ void t_yarp_generator::generate_program_toc_row(t_program* tprog) {
 void t_yarp_generator::generate_program() {
   // Make output directory
   MKDIR(get_out_dir().c_str());
-  string fname = get_out_dir() + program_->get_name() + ".cpp";
+
+  string fname = get_out_dir() + program_->get_name() + ".h";
   f_out_.open(fname.c_str());
   f_out_ << "// Thrift module: " << program_->get_name() << endl;
 
@@ -525,6 +526,7 @@ void t_yarp_generator::generate_program() {
         generate_xception(*o_iter);
       } else {
         generate_struct(*o_iter);
+	f_out_ << "#include \"" << (*o_iter)->get_name() << ".h\"" << endl;
       }
     }
   }
@@ -537,6 +539,7 @@ void t_yarp_generator::generate_program() {
     for (sv_iter = services.begin(); sv_iter != services.end(); ++sv_iter) {
       service_name_ = get_service_name(*sv_iter);
       generate_service(*sv_iter);
+      f_out_ << "#include \"" << (*sv_iter)->get_name() << ".h\"" << endl;
     }
   }
 
@@ -549,11 +552,13 @@ void t_yarp_generator::generate_program() {
  * Emits the index.html file for the recursive set of Thrift programs
  */
 void t_yarp_generator::generate_index() {
+  /*
   string index_fname = get_out_dir() + "index.cpp";
   f_out_.open(index_fname.c_str());
   vector<t_program*> programs;
   generate_program_toc_rows(program_, programs);
   f_out_.close();
+  */
 }
 
 /**
@@ -740,64 +745,69 @@ void t_yarp_generator::generate_const(t_const* tconst) {
  * @param tstruct The struct definition
  */
 void t_yarp_generator::generate_struct(t_struct* tstruct) {
+  string sttname = tstruct->get_name();
+  string f_header_name = get_out_dir()+sttname+".h";
+  ofstream f_stt_;
+  f_stt_.open(f_header_name.c_str());
+
   string name = tstruct->get_name();
   bool except = tstruct->is_xception();
   vector<t_field*> members = tstruct->get_members();
   vector<t_field*>::iterator mem_iter = members.begin();
 
-  f_out_ << "class " << name << " : public yarp::os::Portable {" << endl;
-  f_out_ << "public:" << endl;
+  f_stt_ << "class " << name << " : public yarp::os::Portable {" << endl;
+  f_stt_ << "public:" << endl;
   indent_up();
 
   for ( ; mem_iter != members.end(); mem_iter++) {
     string mname = (*mem_iter)->get_name();
     string mtype = print_type((*mem_iter)->get_type());
-    indent(f_out_) << mtype << " " << mname << ";" << endl; 
+    indent(f_stt_) << mtype << " " << mname << ";" << endl; 
   }
   mem_iter = members.begin();
 
-  indent(f_out_) << "bool read(yarp::os::ConnectionReader& connection) {" 
+  indent(f_stt_) << "bool read(yarp::os::ConnectionReader& connection) {" 
 		 << endl;
   indent_up();
-  indent(f_out_) << "yarp::os::ReaderHelper helper(connection);" 
+  indent(f_stt_) << "yarp::os::ReaderHelper helper(connection);" 
 		 << endl;
   for ( ; mem_iter != members.end(); mem_iter++) {
     string mname = (*mem_iter)->get_name();
     string mtype = print_type((*mem_iter)->get_type());
-    //indent(f_out_) << "// read: " << mtype << " " << mname << ";" << endl; 
-    indent(f_out_) << "if (!";
-    generate_deserialize_field(f_out_, *mem_iter, "this->");
-    f_out_ << ") return false;" << endl;
+    //indent(f_stt_) << "// read: " << mtype << " " << mname << ";" << endl; 
+    indent(f_stt_) << "if (!";
+    generate_deserialize_field(f_stt_, *mem_iter, "this->");
+    f_stt_ << ") return false;" << endl;
   }
-  indent(f_out_) << "return helper.result();" 
+  indent(f_stt_) << "return helper.result();" 
 		 << endl;
   indent_down();
-  indent(f_out_) << "}" << endl;
+  indent(f_stt_) << "}" << endl;
   mem_iter = members.begin();
 
 
-  indent(f_out_) << "bool write(yarp::os::ConnectionWriter& connection) {" 
+  indent(f_stt_) << "bool write(yarp::os::ConnectionWriter& connection) {" 
 		 << endl;
   indent_up();
-  indent(f_out_) << "yarp::os::WriterHelper helper(connection);" 
+  indent(f_stt_) << "yarp::os::WriterHelper helper(connection);" 
 		 << endl;
   for ( ; mem_iter != members.end(); mem_iter++) {
     string mname = (*mem_iter)->get_name();
     string mtype = print_type((*mem_iter)->get_type());
-    //indent(f_out_) << "// write: " << mtype << " " << mname << ";" << endl; 
-    indent(f_out_) << "if (!";
-    generate_serialize_field(f_out_, *mem_iter, "this->");
-    f_out_ << ") return false;" << endl;
-    //generate_serialize_field(f_out_, *mem_iter, "this->");
+    //indent(f_stt_) << "// write: " << mtype << " " << mname << ";" << endl; 
+    indent(f_stt_) << "if (!";
+    generate_serialize_field(f_stt_, *mem_iter, "this->");
+    f_stt_ << ") return false;" << endl;
+    //generate_serialize_field(f_stt_, *mem_iter, "this->");
   }
-  indent(f_out_) << "return helper.result();" 
+  indent(f_stt_) << "return helper.result();" 
 		 << endl;
   indent_down();
-  indent(f_out_) << "}" << endl;
+  indent(f_stt_) << "}" << endl;
   mem_iter = members.begin();
 
   indent_down();
-  f_out_ << "};" << endl;
+  f_stt_ << "};" << endl;
 }
 
 void t_yarp_generator::generate_xception(t_struct* txception) {
@@ -834,232 +844,150 @@ std::string t_yarp_generator::function_prototype(t_function *tfn) {
 }
 
 void t_yarp_generator::generate_service(t_service* tservice) {
+  string svcname = tservice->get_name();
+  string f_header_name = get_out_dir()+svcname+".h";
+  ofstream f_srv_;
+  f_srv_.open(f_header_name.c_str());
+  
   {
-    f_out_ << "class " << service_name_ << " : public yarp::os::PortReader {" << endl;
-    f_out_ << "private:" << endl;
+
+
+    f_srv_ << "class " << service_name_ << " : public yarp::os::PortReader {" << endl;
+    f_srv_ << "private:" << endl;
     indent_up();
-    indent(f_out_) << "yarp::os::Contactable *port;" << endl;
+    indent(f_srv_) << "yarp::os::Contactable *port;" << endl;
     indent_down();
-    f_out_ << "public:" << endl;
+    f_srv_ << "public:" << endl;
     indent_up();
-    indent(f_out_) << service_name_ 
-		   << "() { port = 0/*NULL*/; mode = 0; }" << endl;
-    indent(f_out_) << "bool attachPort(yarp::os::Contactable& port) {" << endl;
+    indent(f_srv_) << service_name_ 
+		   << "() { port = 0/*NULL*/; }" << endl;
+    indent(f_srv_) << "bool attachPort(yarp::os::Contactable& port) {" << endl;
     indent_up();
-    indent(f_out_) << "this->port = &port;" << endl;
-    indent(f_out_) << "port.setReader(this);" << endl;
-    indent(f_out_) << "return true;" << endl;
+    indent(f_srv_) << "this->port = &port;" << endl;
+    indent(f_srv_) << "port.setReader(this);" << endl;
+    indent(f_srv_) << "return true;" << endl;
     indent_down();
-    indent(f_out_) << "}" << endl;
+    indent(f_srv_) << "}" << endl;
     vector<t_function*> functions = tservice->get_functions();
     vector<t_function*>::iterator fn_iter = functions.begin();
     for ( ; fn_iter != functions.end(); fn_iter++) {
-      indent(f_out_) << "virtual " << function_prototype(*fn_iter) 
+      indent(f_srv_) << "virtual " << function_prototype(*fn_iter) 
 		     << " {" << endl;
       indent_up();
 
       t_type* returntype = (*fn_iter)->get_returntype();
       t_field returnfield(returntype, "_return");
       if (!returntype->is_void()) {
-	indent(f_out_) << declare_field(&returnfield, true) << endl;
+	indent(f_srv_) << declare_field(&returnfield, true) << endl;
       }
-      indent(f_out_) << "if (!port) ";
+      indent(f_srv_) << "if (!port) ";
       if (returntype->is_void() || is_complex_type(returntype)) {
-        f_out_ << "return;" << endl;
+        f_srv_ << "return;" << endl;
       } else {
-	f_out_ << "return _return;" << endl;
+	f_srv_ << "return _return;" << endl;
       }
-      //indent_down();
-      //indent(f_out_) << "}" << endl;
-      indent(f_out_) << "yarp::os::RpcHelper helper(*port);" << endl;
-      indent(f_out_) << "bool ok = true;" << endl;
+      indent(f_srv_) << "yarp::os::RpcHelper helper(*port);" << endl;
+      indent(f_srv_) << "bool ok = true;" << endl;
       vector<t_field*> args = (*fn_iter)->get_arglist()->get_members();
       vector<t_field*>::iterator arg_iter = args.begin();
-      indent(f_out_) << "ok = ok && helper.writeTag(\"" << (*fn_iter)->get_name() << "\");" << endl;
+      indent(f_srv_) << "ok = ok && helper.writeTag(\"" << (*fn_iter)->get_name() << "\");" << endl;
       if (arg_iter != args.end()) {
 	for ( ; arg_iter != args.end(); arg_iter++) {
-	  indent(f_out_) << "ok = ok && ";
-	  generate_serialize_field(f_out_, *arg_iter, "");
-	  f_out_ << ";" << endl;
+	  indent(f_srv_) << "ok = ok && ";
+	  generate_serialize_field(f_srv_, *arg_iter, "");
+	  f_srv_ << ";" << endl;
 	}
       }
-      indent(f_out_) << "if (ok) ok = helper.apply();" << endl;
+      indent(f_srv_) << "if (ok) ok = helper.apply();" << endl;
       if (!returntype->is_void()) {
-	indent(f_out_) << "if (!ok) ";
+	indent(f_srv_) << "if (!ok) ";
 	if (returntype->is_void() || is_complex_type(returntype)) {
-	  f_out_ << "return;" << endl;
+	  f_srv_ << "return;" << endl;
 	} else {
-	  f_out_ << "return _return;" << endl;
+	  f_srv_ << "return _return;" << endl;
 	}
-	indent(f_out_) << "";
-	generate_deserialize_field(f_out_, &returnfield, "");
-	f_out_ << ";" << endl;
+	indent(f_srv_) << "";
+	generate_deserialize_field(f_srv_, &returnfield, "");
+	f_srv_ << ";" << endl;
 	if (returntype->is_void() || is_complex_type(returntype)) {
-	  indent(f_out_) << "return;" << endl;
+	  indent(f_srv_) << "return;" << endl;
 	} else {
-	  indent(f_out_) << "return _return;" << endl;
+	  indent(f_srv_) << "return _return;" << endl;
 	}
       }
 
       indent_down();
-      indent(f_out_) << "}" << endl;
+      indent(f_srv_) << "}" << endl;
     }
 
 
-    indent(f_out_) << "virtual bool read(yarp::os::ConnectionReader& reader) {"
+    indent(f_srv_) << "virtual bool read(yarp::os::ConnectionReader& reader) {"
 		   << endl;
     indent_up();
-    indent(f_out_) << "yarp::os::ReaderHelper helper(reader);" << endl;
-    indent(f_out_) << "yarp::os::ConstString tag = reader.expectTag();" << endl;
-    indent(f_out_) << "if reader.isError() return false;" << endl;
-    indent(f_out_) << "bool ok = true;" << endl;
-    indent(f_out_) << "// TODO: use quick lookup, this is just a test" << endl;
+    indent(f_srv_) << "yarp::os::ReaderHelper helper(reader);" << endl;
+    indent(f_srv_) << "yarp::os::ConstString tag = reader.expectTag();" << endl;
+    indent(f_srv_) << "if reader.isError() return false;" << endl;
+    indent(f_srv_) << "bool ok = true;" << endl;
+    indent(f_srv_) << "// TODO: use quick lookup, this is just a test" << endl;
     //indent_up();
     fn_iter = functions.begin();
     for ( ; fn_iter != functions.end(); fn_iter++) {
-      indent(f_out_) << "if (tag == \"" << (*fn_iter)->get_name() << "\") {" << endl;
+      indent(f_srv_) << "if (tag == \"" << (*fn_iter)->get_name() << "\") {" << endl;
       indent_up();
       vector<t_field*> args = (*fn_iter)->get_arglist()->get_members();
       vector<t_field*>::iterator arg_iter = args.begin();
       if (arg_iter != args.end()) {
 	for ( ; arg_iter != args.end(); arg_iter++) {
-	  indent(f_out_) << declare_field(*arg_iter, false) << endl;
+	  indent(f_srv_) << declare_field(*arg_iter, false) << endl;
 	}
 	arg_iter = args.begin();
 	for ( ; arg_iter != args.end(); arg_iter++) {
-	  indent(f_out_) << "if (!";
-	  generate_deserialize_field(f_out_, *arg_iter, "");
-	  f_out_ << ") return false;" << endl;
+	  indent(f_srv_) << "if (!";
+	  generate_deserialize_field(f_srv_, *arg_iter, "");
+	  f_srv_ << ") return false;" << endl;
 	}
       }
-      indent(f_out_) << (*fn_iter)->get_name() << "(";
+      t_type* returntype = (*fn_iter)->get_returntype();
+      t_field returnfield(returntype, "_return");
+      if (!returntype->is_void()) {
+	indent(f_srv_) << declare_field(&returnfield, false) << endl;
+	indent(f_srv_) << "_return = ";
+      } else {
+	indent(f_srv_);
+      }
+
+      f_srv_ << (*fn_iter)->get_name() << "(";
       arg_iter = args.begin();
       if (arg_iter != args.end()) {
 	bool first = true;
 	for ( ; arg_iter != args.end(); arg_iter++) {
-	  if (!first) f_out_ << ",";
+	  if (!first) f_srv_ << ",";
 	  first = false;
-	  f_out_ << (*arg_iter)->get_name();
+	  f_srv_ << (*arg_iter)->get_name();
 	}
       }
-      f_out_ << ");" << endl;
+      f_srv_ << ");" << endl;
+      if (!returntype->is_void()) {
+	indent(f_srv_) << "if (!";
+	generate_serialize_field(f_srv_, &returnfield, "");
+	f_srv_ << ") return false;" << endl;
+      }
+      indent(f_srv_) << "return true;" << endl;
 
       indent_down();
-      indent(f_out_) << "}" << endl;
+      indent(f_srv_) << "}" << endl;
     }
     //indent_down();
-    //indent(f_out_) << "}" << endl;
-    indent(f_out_) << "return false;" << endl;
+    //indent(f_srv_) << "}" << endl;
+    indent(f_srv_) << "return false;" << endl;
     indent_down();
-    indent(f_out_) << "}" << endl;
+    indent(f_srv_) << "}" << endl;
 
 
     indent_down();
-    f_out_ << "};" << endl
+    f_srv_ << "};" << endl
 	   << endl;
   }
-
-
-  /*
-  {
-    f_out_ << "class " << service_name_ << " {" << endl;
-    f_out_ << "public:" << endl;
-    indent_up();
-    vector<t_function*> functions = tservice->get_functions();
-    vector<t_function*>::iterator fn_iter = functions.begin();
-    for ( ; fn_iter != functions.end(); fn_iter++) {
-      indent(f_out_) << "virtual " << function_prototype(*fn_iter) 
-		     << " = 0;" << endl;
-    }
-    indent_down();
-    f_out_ << "};" << endl
-	   << endl;
-  }
-  
-  {
-    f_out_ << "class " << service_name_ << "Client : public " << service_name_ << ", public yarp::os::Client {" << endl;
-    f_out_ << "public:" << endl;
-    indent_up();
-
-    vector<t_function*> functions = tservice->get_functions();
-    vector<t_function*>::iterator fn_iter = functions.begin();
-    for ( ; fn_iter != functions.end(); fn_iter++) {
-      indent(f_out_) << "virtual " << function_prototype(*fn_iter);
-      f_out_ << " {" << endl;
-      indent_up();
-      indent(f_out_) << "yarp::os::ConnectionWriter& writer = getWriter();" 
-		     << endl;
-      indent(f_out_) << "// proxy action" << endl;
-      if ((*fn_iter)->is_oneway()) {
-	indent(f_out_) << "// (one way)" << endl;
-      }
-      indent_down();
-      indent(f_out_) << "}" << endl;
-    }
-    indent_down();
-    f_out_ << "};" << endl
-	   << endl;
-  }
-
-  {
-    f_out_ << "class " << service_name_ << "Server : public " << service_name_ << ", public yarp::os::PortReader {" << endl;
-    f_out_ << "public:" << endl;
-    indent_up();
-    indent(f_out_) << service_name_ << " *impl;" << endl;
-    indent(f_out_) << service_name_ 
-		   << "Server() { impl = 0; }" << endl;
-
-    vector<t_function*> functions = tservice->get_functions();
-    vector<t_function*>::iterator fn_iter = functions.begin();
-    for ( ; fn_iter != functions.end(); fn_iter++) {
-      indent(f_out_) << "virtual " << function_prototype(*fn_iter);
-      f_out_ << " {" << endl;
-      indent_up();
-      indent(f_out_);
-      if (!(*fn_iter)->get_returntype()->is_void()) {
-	f_out_ << "return ";
-      }
-      f_out_ << "impl->" + (*fn_iter)->get_name() << "(";
-      bool first = true;
-      vector<t_field*> args = (*fn_iter)->get_arglist()->get_members();
-      vector<t_field*>::iterator arg_iter = args.begin();
-      if (arg_iter != args.end()) {
-	for ( ; arg_iter != args.end(); arg_iter++) {
-	  if (!first) {
-	    f_out_ << ",";
-	  }
-	  first = false;
-	  f_out_ << (*arg_iter)->get_name();
-	}
-      }
-      f_out_ << ");" << endl;
-      indent_down();
-      indent(f_out_) << "}" << endl;
-    }
-    indent(f_out_) << "virtual bool read(yarp::os::ConnectionReader& reader) {"
-		   << endl;
-    indent_up();
-    indent(f_out_) << "int tag = reader.expectInt();" << endl;
-    indent(f_out_) << "if reader.isError() return false;" << endl;
-    indent(f_out_) << "switch (tag) {" << endl;
-    indent_up();
-    fn_iter = functions.begin();
-    for ( ; fn_iter != functions.end(); fn_iter++) {
-      indent(f_out_) << "case ...:" << endl;
-      indent_up();
-      indent(f_out_) << "// " << (*fn_iter)->get_name() << endl;
-      indent(f_out_) << "break;" << endl;
-      indent_down();
-    }
-    indent_down();
-    indent(f_out_) << "}" << endl;
-    indent(f_out_) << "return false;" << endl;
-    indent_down();
-    indent(f_out_) << "}" << endl;
-    indent_down();
-    f_out_ << "};" << endl;
-  }
-*/
 }
 
 

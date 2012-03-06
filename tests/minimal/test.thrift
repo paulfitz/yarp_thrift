@@ -1,7 +1,7 @@
 
-namespace cpp tutorial
+namespace cpp yarpy
 
-struct Test {
+struct Nummy {
 1: i32 num1 = 0;
 2: i32 num2;
 }
@@ -9,6 +9,6 @@ struct Test {
 
 service Ziggy {
   void ping();
-  i32 compute(1:i32 id, 2:Test test);
+  i32 compute(1:i32 id, 2:Nummy nummy);
   oneway void stream();
 }
