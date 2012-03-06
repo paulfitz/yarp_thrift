@@ -875,6 +875,7 @@ void t_yarp_generator::generate_service(t_service* tservice) {
       indent(f_out_) << "bool ok = true;" << endl;
       vector<t_field*> args = (*fn_iter)->get_arglist()->get_members();
       vector<t_field*>::iterator arg_iter = args.begin();
+      indent(f_out_) << "ok = ok && helper.writeTag(\"" << (*fn_iter)->get_name() << "\");" << endl;
       if (arg_iter != args.end()) {
 	for ( ; arg_iter != args.end(); arg_iter++) {
 	  indent(f_out_) << "ok = ok && ";
@@ -908,20 +909,46 @@ void t_yarp_generator::generate_service(t_service* tservice) {
     indent(f_out_) << "virtual bool read(yarp::os::ConnectionReader& reader) {"
 		   << endl;
     indent_up();
-    indent(f_out_) << "int tag = reader.expectInt();" << endl;
+    indent(f_out_) << "yarp::os::ReaderHelper helper(reader);" << endl;
+    indent(f_out_) << "yarp::os::ConstString tag = reader.expectTag();" << endl;
     indent(f_out_) << "if reader.isError() return false;" << endl;
-    indent(f_out_) << "switch (tag) {" << endl;
-    indent_up();
+    indent(f_out_) << "bool ok = true;" << endl;
+    indent(f_out_) << "// TODO: use quick lookup, this is just a test" << endl;
+    //indent_up();
     fn_iter = functions.begin();
     for ( ; fn_iter != functions.end(); fn_iter++) {
-      indent(f_out_) << "case ...:" << endl;
+      indent(f_out_) << "if (tag == \"" << (*fn_iter)->get_name() << "\") {" << endl;
       indent_up();
-      indent(f_out_) << "// " << (*fn_iter)->get_name() << endl;
-      indent(f_out_) << "break;" << endl;
+      vector<t_field*> args = (*fn_iter)->get_arglist()->get_members();
+      vector<t_field*>::iterator arg_iter = args.begin();
+      if (arg_iter != args.end()) {
+	for ( ; arg_iter != args.end(); arg_iter++) {
+	  indent(f_out_) << declare_field(*arg_iter, false) << endl;
+	}
+	arg_iter = args.begin();
+	for ( ; arg_iter != args.end(); arg_iter++) {
+	  indent(f_out_) << "if (!";
+	  generate_deserialize_field(f_out_, *arg_iter, "");
+	  f_out_ << ") return false;" << endl;
+	}
+      }
+      indent(f_out_) << (*fn_iter)->get_name() << "(";
+      arg_iter = args.begin();
+      if (arg_iter != args.end()) {
+	bool first = true;
+	for ( ; arg_iter != args.end(); arg_iter++) {
+	  if (!first) f_out_ << ",";
+	  first = false;
+	  f_out_ << (*arg_iter)->get_name();
+	}
+      }
+      f_out_ << ");" << endl;
+
       indent_down();
+      indent(f_out_) << "}" << endl;
     }
-    indent_down();
-    indent(f_out_) << "}" << endl;
+    //indent_down();
+    //indent(f_out_) << "}" << endl;
     indent(f_out_) << "return false;" << endl;
     indent_down();
     indent(f_out_) << "}" << endl;
@@ -1261,8 +1288,8 @@ void t_yarp_generator::generate_deserialize_struct(ofstream& out,
 						   t_struct* tstruct,
 						   string prefix) {
   (void) tstruct;
-  indent(out) <<
-    "xfer += " << prefix << ".read(iprot);" << endl;
+  out <<
+    "helper.read(" << prefix << ")";
 }
 
 void t_yarp_generator::generate_deserialize_container(ofstream& out,
