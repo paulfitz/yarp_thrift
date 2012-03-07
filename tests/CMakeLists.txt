@@ -6,7 +6,13 @@ macro(add_out_test name out chk)
   add_test(${name} ${CMAKE_COMMAND} -Dname=${name} "-Dout:STRING=${out}" "-Dchk:STRING=${chk}" "-Dprocess:STRING=${ARGN}" -P ${CMAKE_CURRENT_SOURCE_DIR}/harness.cmake)
 endmacro()
 
+##########################################################################
+##########################################################################
+#
 # Check for runnability
+#
+##########################################################################
+##########################################################################
 
 add_test(minimal_cpp ${tcc} --gen cpp ${TESTS}/minimal/test.thrift)
 add_test(minimal_yarp ${tcc} --gen yarp ${TESTS}/minimal/test.thrift)
@@ -23,4 +29,15 @@ add_out_test(minimal_existent minimal_existent.out
   "Unable to get a generator"
   ${tcc} --gen yarp ${TESTS}/minimal/test.thrift)
 set_property(TEST minimal_existent PROPERTY WILL_FAIL TRUE)
+
+
+
+
+##########################################################################
+##########################################################################
+#
+# Check for compilability
+#
+##########################################################################
+##########################################################################
 
