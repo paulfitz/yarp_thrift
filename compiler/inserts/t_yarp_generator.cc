@@ -755,6 +755,12 @@ void t_yarp_generator::generate_struct(t_struct* tstruct) {
   vector<t_field*> members = tstruct->get_members();
   vector<t_field*>::iterator mem_iter = members.begin();
 
+  f_stt_ << "#ifndef YARP_THRIFT_GENERATOR_STRUCT_" << name << endl;
+  f_stt_ << "#define YARP_THRIFT_GENERATOR_STRUCT_" << name << endl;
+  f_stt_ << endl;
+  f_stt_ << "#include <yarp/os/Wire.h>" << endl;
+  f_stt_ << endl;
+
   f_stt_ << "class " << name << " : public yarp::os::Portable {" << endl;
   f_stt_ << "public:" << endl;
   indent_up();
@@ -779,7 +785,7 @@ void t_yarp_generator::generate_struct(t_struct* tstruct) {
     generate_deserialize_field(f_stt_, *mem_iter, "this->");
     f_stt_ << ") return false;" << endl;
   }
-  indent(f_stt_) << "return reader.result();" 
+  indent(f_stt_) << "return !reader.isError();" 
 		 << endl;
   indent_down();
   indent(f_stt_) << "}" << endl;
@@ -789,7 +795,7 @@ void t_yarp_generator::generate_struct(t_struct* tstruct) {
   indent(f_stt_) << "bool write(yarp::os::ConnectionWriter& connection) {" 
 		 << endl;
   indent_up();
-  indent(f_stt_) << "yarp::os::WriterHelper writer(connection);" 
+  indent(f_stt_) << "yarp::os::WireWriter writer(connection);" 
 		 << endl;
   for ( ; mem_iter != members.end(); mem_iter++) {
     string mname = (*mem_iter)->get_name();
@@ -800,7 +806,7 @@ void t_yarp_generator::generate_struct(t_struct* tstruct) {
     f_stt_ << ") return false;" << endl;
     //generate_serialize_field(f_stt_, *mem_iter, "this->");
   }
-  indent(f_stt_) << "return writer.result();" 
+  indent(f_stt_) << "return !writer.isError();" 
 		 << endl;
   indent_down();
   indent(f_stt_) << "}" << endl;
@@ -808,6 +814,10 @@ void t_yarp_generator::generate_struct(t_struct* tstruct) {
 
   indent_down();
   f_stt_ << "};" << endl;
+
+  f_stt_ << endl;
+  f_stt_ << "#endif" << endl;
+  f_stt_ << endl;
 }
 
 void t_yarp_generator::generate_xception(t_struct* txception) {

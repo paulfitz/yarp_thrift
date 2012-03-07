@@ -69,7 +69,7 @@ public:
     WireReader(ConnectionReader& reader) : reader(reader) {}
 
     bool read(PortReader& obj) {
-        return false;
+        return obj.read(reader);
     }
 
     bool readI32(int32_t& x) {
@@ -111,7 +111,7 @@ public:
     WireWriter(WireReader& reader) : writer(reader.getWriter()) {}
 
     bool write(PortWriter& obj) {
-        return false;
+        return obj.write(writer);
     }
 
     bool writeI32(int32_t x) {
