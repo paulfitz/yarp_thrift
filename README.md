@@ -1,19 +1,16 @@
-This project is a way to compile Apache thrift with CMake.
+This project is a way to use Apache thrift with YARP.
 
-How to use:
+It creates two programs:
+* tcc - a copy of the thrift compiler, with a YARP generator added
+* test_demo - a test of YARP communication (start YARP nameserver before 
+running this.
 
-    mkdir build && ccmake ..
-    # point THRIFT_ROOT to thrift source code
-    make
+How to compile:
 
-If you are not familiar with CMake, try:
+    git clone git://github.com/paulfitz/yarp_thrift.git
+    cd yarp_thrift
+    git submodule update --init
+    mkdir build && cd build && cmake .. && make
 
-    mkdir thrift_me
-    cd thrift_me
-    svn co http://svn.apache.org/repos/asf/thrift/trunk thrift
-    git clone git@github.com:paulfitz/thrift_cmake.git
-    mkdir build
-    cd build
-    cmake ../thrift_cmake
-    make
-    ./tcc
+If you have the Thrift source tree, you can skip the submodule
+step and set the THRIFT_ROOT variable.
