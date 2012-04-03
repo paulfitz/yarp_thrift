@@ -32,6 +32,35 @@
 using namespace std;
 
 
+class yfn {
+public:
+  std::string name;
+  bool split;
+  int len;
+
+  yfn(const std::string& name) {
+    apply(name);
+  }
+
+  void apply(const std::string& name) {
+    this->name = name;
+    int ct = 1;
+    int ct1 = 0;
+    int ct_max = 0;
+    for (string::size_type i=0; i<name.size(); i++) {
+      if (name[i]=='_') {
+	ct++;
+	ct1 = 0;
+      } else {
+	ct1++;
+	if (ct1>ct_max) ct_max = ct1;
+      }
+    }
+    split = (ct_max<=4);
+    len = split?ct:1;
+  }
+};
+
 /**
  * YARP code generator
  *
@@ -777,6 +806,10 @@ void t_yarp_generator::generate_struct(t_struct* tstruct) {
   indent_up();
   indent(f_stt_) << "yarp::os::WireReader reader(connection);" 
 		 << endl;
+  indent(f_stt_) << "if (!reader.readListHeader(" 
+		 << members.size()
+		 << ")) return false;"
+		 << endl;
   for ( ; mem_iter != members.end(); mem_iter++) {
     string mname = (*mem_iter)->get_name();
     string mtype = print_type((*mem_iter)->get_type());
@@ -796,6 +829,10 @@ void t_yarp_generator::generate_struct(t_struct* tstruct) {
 		 << endl;
   indent_up();
   indent(f_stt_) << "yarp::os::WireWriter writer(connection);" 
+		 << endl;
+  indent(f_stt_) << "if (!writer.writeListHeader(" 
+		 << members.size()
+		 << ")) return false;"
 		 << endl;
   for ( ; mem_iter != members.end(); mem_iter++) {
     string mname = (*mem_iter)->get_name();
@@ -889,10 +926,15 @@ void t_yarp_generator::generate_service(t_service* tservice) {
 
       indent(f_srv_) << "virtual bool write(yarp::os::ConnectionWriter& connection) {" << endl;
       indent_up();
+      yfn y((*fn_iter)->get_name());
       indent(f_srv_) << "yarp::os::WireWriter writer(connection);" 
 		     << endl;
+      indent(f_srv_) << "if (!writer.writeListHeader(" 
+		     << args.size()+y.len
+		     << ")) return false;"
+		     << endl;
       arg_iter = args.begin();
-      indent(f_srv_) << "if (!writer.writeTag(\"" << (*fn_iter)->get_name() << "\")) return false;" << endl;
+      indent(f_srv_) << "if (!writer.writeTag(\"" << y.name << "\"," << y.split << "," << y.len << ")) return false;" << endl;
       if (arg_iter != args.end()) {
 	for ( ; arg_iter != args.end(); arg_iter++) {
 	  indent(f_srv_) << "if (!writer.";
@@ -908,6 +950,10 @@ void t_yarp_generator::generate_service(t_service* tservice) {
       indent_up();
      if (!returntype->is_void()) {
 	indent(f_srv_) << "yarp::os::WireReader reader(connection);" 
+		       << endl;
+	indent(f_srv_) << "if (!reader.readListHeader(" 
+		       << 1
+		       << ")) return false;"
 		       << endl;
 	indent(f_srv_) << "if (!reader.";
 	generate_deserialize_field(f_srv_, &returnfield, "");
@@ -985,6 +1031,8 @@ void t_yarp_generator::generate_service(t_service* tservice) {
 		   << endl;
     indent_up();
     indent(f_srv_) << "yarp::os::WireReader reader(connection);" << endl;
+    indent(f_srv_) << "if (!reader.readListHeader()) return false;"
+		   << endl;
     indent(f_srv_) << "yarp::os::ConstString tag = reader.readTag();" << endl;
     indent(f_srv_) << "if (reader.isError()) return false;" << endl;
     indent(f_srv_) << "bool ok = true;" << endl;
@@ -1029,6 +1077,7 @@ void t_yarp_generator::generate_service(t_service* tservice) {
       f_srv_ << ");" << endl;
       if (!(*fn_iter)->is_oneway()) {
 	indent(f_srv_) << "yarp::os::WireWriter writer(reader);" << endl;
+	indent(f_srv_) << "if (!writer.writeListHeader(1)) return false;" << endl;
       }
       if (!returntype->is_void()) {
 	indent(f_srv_) << "if (!writer.";

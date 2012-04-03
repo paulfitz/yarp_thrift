@@ -35,11 +35,21 @@ public:
 };
 
 int main(int argc, char *argv[]) {
+  Property config;
+  config.fromCommand(argc,argv);
+
   Network yarp;
   Port server_port, client_port;
   server_port.open("/demo");
-  client_port.open("/demo/client");
-  yarp.connect("/demo/client","/demo");
+
+  bool client = !config.check("server");
+
+  if (client) {
+    client_port.open("/demo/client");
+    //yarp.connect("/demo/client","/demo");
+    yarp.connect("/demo/client","/demo","text_ack");
+  }
+
   RemoteDemo server;
   server.attachPort(server_port);
   Demo demo;
@@ -51,16 +61,25 @@ int main(int argc, char *argv[]) {
   offset.x = 1;
   offset.y = 2;
   offset.z = 3;
-  demo.attachPort(client_port);
+  if (client) {
+    demo.attachPort(client_port);
+  }
   int ct = 1;
   int seq = 1;
   string xs = "";
   while (true) {
-    ct = demo.add_one(ct);
-    seq = demo.double_down(seq);
-    xs = demo.add_x(xs);
-    point = demo.add_point(point,offset);
-    printf("Count %d / sequence %d / xs %s / point %d %d %d\n", ct, seq, xs.c_str(), point.x, point.y, point.z);
+    if (client) {
+      printf("== add_one ==\n");
+      ct = demo.add_one(ct);
+      printf("== double_down ==\n");
+      seq = demo.double_down(seq);
+      printf("== add_x ==\n");
+      xs = demo.add_x(xs);
+      printf("== add_point ==\n");
+      point = demo.add_point(point,offset);
+      printf("== done! ==\n");
+      printf("Count %d / sequence %d / xs %s / point %d %d %d\n", ct, seq, xs.c_str(), point.x, point.y, point.z);
+    }
     Time::delay(1);
   }
   return 0;
