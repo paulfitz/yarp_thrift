@@ -73,10 +73,14 @@ class yarp::os::WireState {
 public:
     int len;
     int code;
+    bool need_ok;
+    WireState *parent;
 
     WireState() {
         len = -1;
         code = -1;
+        need_ok = false;
+        parent = 0 /*NULL*/;
     }
 
     bool isValid() const { 
@@ -89,45 +93,77 @@ class yarp::os::WireReader {
 public:
     NullConnectionWriter null_writer;
     ConnectionReader& reader;
-    WireState state;
+    WireState baseState;
+    WireState *state;
 
     WireReader(ConnectionReader& reader) : reader(reader) {
         reader.convertTextMode();
+        state = &baseState;
+    }
+
+    ~WireReader() {
+        if (state->need_ok) {
+            int32_t dummy;
+            readVocab(dummy);
+            state->need_ok = false;
+        }
     }
 
     bool read(PortReader& obj) {
-        state.len--;
+        state->len--;
         return obj.read(reader);
     }
 
     bool readI32(int32_t& x) {
-        if (state.code<0) {
+        if (state->code<0) {
             int tag = reader.expectInt();
             if (tag!=BOTTLE_TAG_INT) return false;
         }
         int v = reader.expectInt();
         x = (int32_t) v;
-        state.len--;
+        state->len--;
+        return !reader.isError();
+    }
+
+    bool readBool(bool& x) {
+        if (state->code<0) {
+            int tag = reader.expectInt();
+            if (tag!=BOTTLE_TAG_INT&&tag!=BOTTLE_TAG_VOCAB) return false;
+        }
+        int v = reader.expectInt();
+        x = (v!=0) && (v!=VOCAB4('f','a','i','l'));
+        state->len--;
+        return !reader.isError();
+    }
+
+    bool readVocab(int32_t& x) {
+        if (state->code<0) {
+            int tag = reader.expectInt();
+            if (tag!=BOTTLE_TAG_VOCAB) return false;
+        }
+        int v = reader.expectInt();
+        x = (int32_t) v;
+        state->len--;
         return !reader.isError();
     }
 
     bool readDouble(double& x) {
-        if (state.code<0) {
+        if (state->code<0) {
             int tag = reader.expectInt();
             if (tag!=BOTTLE_TAG_DOUBLE) return false;
         }
         x = reader.expectDouble();
-        state.len--;
+        state->len--;
         return !reader.isError();
     }
 
     bool readString(std::string& str, bool *is_vocab = 0 /*NULL*/) {
-        int tag = state.code;
-        if (state.code<0) {
+        int tag = state->code;
+        if (state->code<0) {
             tag = reader.expectInt();
             if (tag!=BOTTLE_TAG_STRING&&tag!=BOTTLE_TAG_VOCAB) return false;
         }
-        state.len--;
+        state->len--;
         if (tag==BOTTLE_TAG_VOCAB) {
             if (is_vocab) *is_vocab = true;
             NetInt32 v = reader.expectInt();
@@ -152,14 +188,29 @@ public:
         x2 = reader.expectInt();
         if (!(x1&BOTTLE_TAG_LIST)) return false;
         int code = x1&(~BOTTLE_TAG_LIST);
-        state.len = x2;
-        if (code!=0) state.code = code;
+        state->len = x2;
+        if (code!=0) state->code = code;
         return !reader.isError();
     }
 
     bool readListHeader(int len) {
         if (!readListHeader()) return false;
-        return len == state.len;
+        return len == state->len;
+    }
+
+    bool readListReturn() {
+        if (!readListHeader()) return false;
+        if (state->len == 1) return true;
+        if (state->len != 4) return false;
+        // possibly old-style return: [is] foo val [ok]
+        int32_t v = 0;
+        if (!readVocab(v)) return false;
+        if (v!=VOCAB2('i','s')) return false;
+        std::string dummy;
+        if (!readString(dummy)) return false; // string OR vocab
+        // now we are ready to consume real result
+        state->need_ok = true;
+        return true;
     }
 
     ConnectionWriter& getWriter() {
@@ -181,7 +232,7 @@ public:
         bool is_vocab;
         if (!readString(str,&is_vocab)) return "";
         if (!is_vocab) return str.c_str();
-        while (is_vocab&&state.len>0) {
+        while (is_vocab&&state->len>0) {
             int x = reader.expectInt();
             reader.pushInt(x);
             is_vocab = (x==BOTTLE_TAG_VOCAB);
@@ -193,6 +244,18 @@ public:
             }
         }
         return str.c_str();
+    }
+
+    void readListBegin(WireState& nstate, uint32_t& len) {
+        nstate.parent = state;
+        state = &nstate;
+        len = 0;
+        readListHeader();
+        len = (uint32_t)state->len;
+    }
+
+    void readListEnd() {
+        state = state->parent;
     }
 };
 
@@ -215,6 +278,12 @@ public:
     bool writeI32(int32_t x) {
         writer.appendInt(BOTTLE_TAG_INT);
         writer.appendInt((int)x);
+        return !writer.isError();
+    }
+
+    bool writeBool(bool x) {
+        writer.appendInt(BOTTLE_TAG_VOCAB);
+        writer.appendInt(x?VOCAB2('o','k'):VOCAB4('f','a','i','l'));
         return !writer.isError();
     }
 
@@ -264,6 +333,18 @@ public:
         writer.appendInt(BOTTLE_TAG_LIST);
         writer.appendInt(len);
         return !writer.isError();
+    }
+
+
+    bool writeListBegin(int tag, uint32_t len) {
+        // this should be optimized for double/int/etc
+        writer.appendInt(BOTTLE_TAG_LIST);
+        writer.appendInt((int)len);
+        return !writer.isError();
+    }
+
+    bool writeListEnd() {
+        return true;
     }
 };
 

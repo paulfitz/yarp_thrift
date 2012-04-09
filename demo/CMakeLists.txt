@@ -26,7 +26,11 @@ add_executable(test_demo ${ODIR}/Demo.h demo.cpp
   ${CMAKE_SOURCE_DIR}/yarp/include/yarp/os/Wire.h)
 target_link_libraries(test_demo ${YARP_LIBRARIES})
 
-add_executable(demo_motor ${ODIR}/Motor.h demo_motor.cpp 
+add_executable(motor_client ${ODIR}/Motor.h motor_client.cpp 
   ${CMAKE_SOURCE_DIR}/yarp/include/yarp/os/Wire.h)
-target_link_libraries(demo_motor ${YARP_LIBRARIES})
+target_link_libraries(motor_client ${YARP_LIBRARIES})
+
+add_executable(motor_server ${ODIR}/Motor.h motor_server.cpp 
+  ${CMAKE_SOURCE_DIR}/yarp/include/yarp/os/Wire.h)
+target_link_libraries(motor_server ${YARP_LIBRARIES})
 

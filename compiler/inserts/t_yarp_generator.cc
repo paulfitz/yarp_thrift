@@ -201,19 +201,19 @@ string t_yarp_generator::type_to_enum(t_type* type) {
     case t_base_type::TYPE_VOID:
       throw "NO T_VOID CONSTRUCT";
     case t_base_type::TYPE_STRING:
-      return "::apache::thrift::protocol::T_STRING";
+      return "BOTTLE_TAG_STRING";
     case t_base_type::TYPE_BOOL:
-      return "::apache::thrift::protocol::T_BOOL";
+      return "BOTTLE_TAG_VOCAB";
     case t_base_type::TYPE_BYTE:
       return "::apache::thrift::protocol::T_BYTE";
     case t_base_type::TYPE_I16:
       return "::apache::thrift::protocol::T_I16";
     case t_base_type::TYPE_I32:
-      return "::apache::thrift::protocol::T_I32";
+      return "BOTTLE_TAG_INT";
     case t_base_type::TYPE_I64:
       return "::apache::thrift::protocol::T_I64";
     case t_base_type::TYPE_DOUBLE:
-      return "::apache::thrift::protocol::T_DOUBLE";
+      return "BOTTLE_TAG_DOUBLE";
     }
   } else if (type->is_enum()) {
     return "::apache::thrift::protocol::T_I32";
@@ -814,9 +814,7 @@ void t_yarp_generator::generate_struct(t_struct* tstruct) {
     string mname = (*mem_iter)->get_name();
     string mtype = print_type((*mem_iter)->get_type());
     //indent(f_stt_) << "// read: " << mtype << " " << mname << ";" << endl; 
-    indent(f_stt_) << "if (!reader.";
-    generate_deserialize_field(f_stt_, *mem_iter, "this->");
-    f_stt_ << ") return false;" << endl;
+    generate_deserialize_field(f_stt_, *mem_iter, "");
   }
   indent(f_stt_) << "return !reader.isError();" 
 		 << endl;
@@ -838,9 +836,7 @@ void t_yarp_generator::generate_struct(t_struct* tstruct) {
     string mname = (*mem_iter)->get_name();
     string mtype = print_type((*mem_iter)->get_type());
     //indent(f_stt_) << "// write: " << mtype << " " << mname << ";" << endl; 
-    indent(f_stt_) << "if (!writer.";
-    generate_serialize_field(f_stt_, *mem_iter, "this->");
-    f_stt_ << ") return false;" << endl;
+    generate_serialize_field(f_stt_, *mem_iter, "");
     //generate_serialize_field(f_stt_, *mem_iter, "this->");
   }
   indent(f_stt_) << "return !writer.isError();" 
@@ -937,9 +933,7 @@ void t_yarp_generator::generate_service(t_service* tservice) {
       indent(f_srv_) << "if (!writer.writeTag(\"" << y.name << "\"," << y.split << "," << y.len << ")) return false;" << endl;
       if (arg_iter != args.end()) {
 	for ( ; arg_iter != args.end(); arg_iter++) {
-	  indent(f_srv_) << "if (!writer.";
 	  generate_serialize_field(f_srv_, *arg_iter, "");
-	  f_srv_ << ") return false;" << endl;
 	}
       }
       indent(f_srv_) << "return true;" << endl;
@@ -951,13 +945,10 @@ void t_yarp_generator::generate_service(t_service* tservice) {
      if (!returntype->is_void()) {
 	indent(f_srv_) << "yarp::os::WireReader reader(connection);" 
 		       << endl;
-	indent(f_srv_) << "if (!reader.readListHeader(" 
-		       << 1
+	indent(f_srv_) << "if (!reader.readListReturn(" 
 		       << ")) return false;"
 		       << endl;
-	indent(f_srv_) << "if (!reader.";
 	generate_deserialize_field(f_srv_, &returnfield, "");
-	f_srv_ << ") return false;" << endl;
       }
       indent(f_srv_) << "return true;" << endl;
       indent_down();
@@ -1016,7 +1007,11 @@ void t_yarp_generator::generate_service(t_service* tservice) {
       if (!returntype->is_void()) {
 	f_srv_ << "bool ok = ";
       }
-      f_srv_ << "port->write(helper,helper);" << endl;
+      if (!(*fn_iter)->is_oneway()) {
+	f_srv_ << "port->write(helper,helper);" << endl;
+      } else {
+	f_srv_ << "port->write(helper);" << endl;
+      }
       if (!returntype->is_void()) {
 	indent(f_srv_);
 	f_srv_ << "return ok?helper._return:_return;" << endl;
@@ -1050,9 +1045,7 @@ void t_yarp_generator::generate_service(t_service* tservice) {
 	}
 	arg_iter = args.begin();
 	for ( ; arg_iter != args.end(); arg_iter++) {
-	  indent(f_srv_) << "if (!reader.";
 	  generate_deserialize_field(f_srv_, *arg_iter, "");
-	  f_srv_ << ") return false;" << endl;
 	}
       }
       t_type* returntype = (*fn_iter)->get_returntype();
@@ -1078,14 +1071,11 @@ void t_yarp_generator::generate_service(t_service* tservice) {
       if (!(*fn_iter)->is_oneway()) {
 	indent(f_srv_) << "yarp::os::WireWriter writer(reader);" << endl;
 	indent(f_srv_) << "if (!writer.writeListHeader(1)) return false;" << endl;
+	if (!returntype->is_void()) {
+	  generate_serialize_field(f_srv_, &returnfield, "");
+	}
+	indent(f_srv_) << "return true;" << endl;
       }
-      if (!returntype->is_void()) {
-	indent(f_srv_) << "if (!writer.";
-	generate_serialize_field(f_srv_, &returnfield, "");
-	f_srv_ << ") return false;" << endl;
-      }
-      indent(f_srv_) << "return true;" << endl;
-
       indent_down();
       indent(f_srv_) << "}" << endl;
     }
@@ -1121,13 +1111,15 @@ void t_yarp_generator::generate_serialize_field(ofstream& out,
   }
 
   if (type->is_struct() || type->is_xception()) {
+    indent(out) << "if (!writer.";
     generate_serialize_struct(out,
                               (t_struct*)type,
                               name);
+    out << ") return false;" << endl;
   } else if (type->is_container()) {
     generate_serialize_container(out, type, name);
   } else if (type->is_base_type() || type->is_enum()) {
-
+    indent(out) << "if (!writer.";
     if (type->is_base_type()) {
       t_base_type::t_base tbase = ((t_base_type*)type)->get_base();
       switch (tbase) {
@@ -1167,6 +1159,7 @@ void t_yarp_generator::generate_serialize_field(ofstream& out,
     } else if (type->is_enum()) {
       out << "writeI32((int32_t)" << name << ")";
     }
+    out << ") return false;" << endl;
   } else {
     printf("DO NOT KNOW HOW TO SERIALIZE FIELD '%s' TYPE '%s'\n",
            name.c_str(),
@@ -1184,6 +1177,7 @@ void t_yarp_generator::generate_serialize_struct(ofstream& out,
 void t_yarp_generator::generate_serialize_container(ofstream& out,
 						    t_type* ttype,
 						    string prefix) {
+
   scope_up(out);
 
   if (ttype->is_map()) {
@@ -1199,9 +1193,9 @@ void t_yarp_generator::generate_serialize_container(ofstream& out,
       "static_cast<uint32_t>(" << prefix << ".size()));" << endl;
   } else if (ttype->is_list()) {
     indent(out) <<
-      "xfer += oprot->writeListBegin(" <<
+      "if (!writer.writeListBegin(" <<
       type_to_enum(((t_list*)ttype)->get_elem_type()) << ", " <<
-      "static_cast<uint32_t>(" << prefix << ".size()));" << endl;
+      "static_cast<uint32_t>(" << prefix << ".size()))) return false;" << endl;
   }
 
   string iter = tmp("_iter");
@@ -1226,7 +1220,7 @@ void t_yarp_generator::generate_serialize_container(ofstream& out,
       "xfer += oprot->writeSetEnd();" << endl;
   } else if (ttype->is_list()) {
     indent(out) <<
-      "xfer += oprot->writeListEnd();" << endl;
+      "if (!writer.writeListEnd()) return false;" << endl;
   }
 
   scope_down(out);
@@ -1273,10 +1267,13 @@ void t_yarp_generator::generate_deserialize_field(ofstream& out,
   string name = prefix + tfield->get_name() + suffix;
 
   if (type->is_struct() || type->is_xception()) {
+    indent(out) << "if (!reader.";
     generate_deserialize_struct(out, (t_struct*)type, name);
+    out << ") return false;" << endl;
   } else if (type->is_container()) {
     generate_deserialize_container(out, type, name);
   } else if (type->is_base_type()) {
+    indent(out) << "if (!reader.";
     t_base_type::t_base tbase = ((t_base_type*)type)->get_base();
     switch (tbase) {
     case t_base_type::TYPE_VOID:
@@ -1311,6 +1308,7 @@ void t_yarp_generator::generate_deserialize_field(ofstream& out,
     default:
       throw "compiler error: no C++ reader for base type " + t_base_type::t_base_name(tbase) + name;
     }
+    out << ") return false;" << endl;
   } else if (type->is_enum()) {
     string t = tmp("ecast");
     out <<
@@ -1353,17 +1351,17 @@ void t_yarp_generator::generate_deserialize_container(ofstream& out,
     out <<
       indent() << "::apache::thrift::protocol::TType " << ktype << ";" << endl <<
       indent() << "::apache::thrift::protocol::TType " << vtype << ";" << endl <<
-      indent() << "iprot->readMapBegin(" <<
+      indent() << "reader.readMapBegin(" <<
                    ktype << ", " << vtype << ", " << size << ");" << endl;
   } else if (ttype->is_set()) {
     out <<
       indent() << "::apache::thrift::protocol::TType " << etype << ";" << endl <<
-      indent() << "iprot->readSetBegin(" <<
+      indent() << "reader.readSetBegin(" <<
                    etype << ", " << size << ");" << endl;
   } else if (ttype->is_list()) {
     out <<
-      indent() << "::apache::thrift::protocol::TType " << etype << ";" << endl <<
-      indent() << "iprot->readListBegin(" <<
+      indent() << "yarp::os::WireState " << etype << ";" << endl <<
+      indent() << "reader.readListBegin(" <<
       etype << ", " << size << ");" << endl;
     if (!use_push) {
       indent(out) << prefix << ".resize(" << size << ");" << endl;
@@ -1391,11 +1389,11 @@ void t_yarp_generator::generate_deserialize_container(ofstream& out,
 
   // Read container end
   if (ttype->is_map()) {
-    indent(out) << "iprot->readMapEnd();" << endl;
+    indent(out) << "reader.readMapEnd();" << endl;
   } else if (ttype->is_set()) {
-    indent(out) << "iprot->readSetEnd();" << endl;
+    indent(out) << "reader.readSetEnd();" << endl;
   } else if (ttype->is_list()) {
-    indent(out) << "iprot->readListEnd();" << endl;
+    indent(out) << "reader.readListEnd();" << endl;
   }
 
   scope_down(out);
