@@ -46,12 +46,12 @@ int main(int argc, char *argv[]) {
 
   if (client) {
     client_port.open("/demo/client");
-    //yarp.connect("/demo/client","/demo");
-    yarp.connect("/demo/client","/demo","text_ack");
+    yarp.connect("/demo/client","/demo");
+    //yarp.connect("/demo/client","/demo","text_ack");
   }
 
   RemoteDemo server;
-  server.attachPort(server_port);
+  server.serve(server_port);
   Demo demo;
   Point point;
   point.x = 0;
@@ -62,7 +62,7 @@ int main(int argc, char *argv[]) {
   offset.y = 2;
   offset.z = 3;
   if (client) {
-    demo.attachPort(client_port);
+    demo.query(client_port);
   }
   int ct = 1;
   int seq = 1;

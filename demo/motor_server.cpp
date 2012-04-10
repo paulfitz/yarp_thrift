@@ -46,15 +46,27 @@ public:
 
 int main(int argc, char *argv[]) {
   Network yarp;
-  Port port;
-  port.open("/motor/server");
+  Port portRpc, portCommand, portState;
+  portRpc.open("/motor/server/rpc:i");
+  portCommand.open("/motor/server/command:i");
+  portState.open("/motor/server/state:o");
   MotorImpl motor;
-  motor.attachPort(port);
+  motor.serve(portRpc);
+  //motor.serve(portCommand);
+  double start = Time::now();
   while (true) {
-    printf("Motor server running happily\n");
-    Time::delay(10);
+    double now = Time::now();
+    if (now-start>10) {
+      printf("Motor server running happily\n");
+      start += 10;
+      if (now-start>10) start = now;
+    }
+    // stream motor state every now and then
+    Bottle b;
+    b.addDouble(motor.get_enc(0));
+    b.addDouble(motor.get_enc(1));
+    portState.write(b);
+    Time::delay(0.02);
   }
-
-  port.close();
   return 0;
 }

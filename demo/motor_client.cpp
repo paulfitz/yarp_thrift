@@ -13,9 +13,9 @@ int main(int argc, char *argv[]) {
   Network yarp;
   Port port;
   port.open("/motor/client");
-  yarp.connect("/motor/client",argv[1]);
+  yarp.connect("/motor/client",argv[1],"text_ack");
   Motor motor;
-  motor.attachPort(port);
+  motor.query(port);
   int nj = motor.get_axes();
   printf("Number of axes is %d\n", nj);
 
@@ -25,7 +25,9 @@ int main(int argc, char *argv[]) {
   }
   motor.set_poss(poss);
   for (int i=0; i<10; i++) {
+    motor.link().stream();
     motor.set_pos(0,i);
+    motor.link().query();
     double v = motor.get_enc(0);
     printf("Motor %d at %g of %d axes\n", 0, v, motor.get_axes());
     vector<double> all = motor.get_encs();

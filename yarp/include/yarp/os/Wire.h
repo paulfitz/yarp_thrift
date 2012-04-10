@@ -25,6 +25,7 @@ namespace yarp {
         class WireState;
         class WireReader;
         class WireWriter;
+        class WireLink;
     }
 }
 
@@ -95,10 +96,13 @@ public:
     ConnectionReader& reader;
     WireState baseState;
     WireState *state;
+    bool flush_if_needed;
 
     WireReader(ConnectionReader& reader) : reader(reader) {
         reader.convertTextMode();
         state = &baseState;
+        size_t pending = reader.getSize();
+        flush_if_needed = false;
     }
 
     ~WireReader() {
@@ -107,6 +111,29 @@ public:
             readVocab(dummy);
             state->need_ok = false;
         }
+        if (flush_if_needed) {
+            clear();
+        }
+    }
+
+    bool clear() {
+        size_t pending = reader.getSize();
+        if (pending>0) {
+            while (pending>0) {
+                char buf[1000];
+                size_t next = (pending<sizeof(buf))?pending:sizeof(buf);
+                reader.expectBlock(&buf[0],next);
+                pending -= next;
+            }
+            return true;
+        }
+        return false;
+    }
+
+    void fail() {
+        clear();
+        Bottle b("[fail]");
+        b.write(getWriter());
     }
 
     bool read(PortReader& obj) {
@@ -115,10 +142,12 @@ public:
     }
 
     bool readI32(int32_t& x) {
-        if (state->code<0) {
-            int tag = reader.expectInt();
-            if (tag!=BOTTLE_TAG_INT) return false;
+        size_t pending = reader.getSize();
+        int tag = state->code;
+        if (tag<0) {
+            tag = reader.expectInt();
         }
+        if (tag!=BOTTLE_TAG_INT) return false;
         int v = reader.expectInt();
         x = (int32_t) v;
         state->len--;
@@ -137,10 +166,11 @@ public:
     }
 
     bool readVocab(int32_t& x) {
-        if (state->code<0) {
-            int tag = reader.expectInt();
-            if (tag!=BOTTLE_TAG_VOCAB) return false;
+        int tag = state->code;
+        if (tag<0) {
+            tag = reader.expectInt();
         }
+        if (tag!=BOTTLE_TAG_VOCAB) return false;
         int v = reader.expectInt();
         x = (int32_t) v;
         state->len--;
@@ -148,16 +178,24 @@ public:
     }
 
     bool readDouble(double& x) {
-        if (state->code<0) {
-            int tag = reader.expectInt();
-            if (tag!=BOTTLE_TAG_DOUBLE) return false;
+        int tag = state->code;
+        if (tag<0) {
+            tag = reader.expectInt();
         }
+        if (tag==BOTTLE_TAG_INT) {
+            int v = reader.expectInt();
+            x = v;
+            state->len--;
+            return !reader.isError();
+        }
+        if (tag!=BOTTLE_TAG_DOUBLE) return false;
         x = reader.expectDouble();
         state->len--;
         return !reader.isError();
     }
 
     bool readString(std::string& str, bool *is_vocab = 0 /*NULL*/) {
+        if (state->len<=0) return false;
         int tag = state->code;
         if (state->code<0) {
             tag = reader.expectInt();
@@ -178,15 +216,14 @@ public:
         str.resize(len);
         reader.expectBlock((const char *)str.c_str(),len);
         str.resize(len-1);
-        //printf("Read [%s]\n", str.c_str());
         return !reader.isError();
     }
 
     bool readListHeader() {
         int x1 = 0, x2 = 0;
         x1 = reader.expectInt();
-        x2 = reader.expectInt();
         if (!(x1&BOTTLE_TAG_LIST)) return false;
+        x2 = reader.expectInt();
         int code = x1&(~BOTTLE_TAG_LIST);
         state->len = x2;
         if (code!=0) state->code = code;
@@ -214,6 +251,7 @@ public:
     }
 
     ConnectionWriter& getWriter() {
+        flush_if_needed = false;
         ConnectionWriter *writer = reader.getWriter();
         if (writer) return *writer;
         return null_writer;
@@ -228,14 +266,22 @@ public:
     }
 
     yarp::os::ConstString readTag() {
+        flush_if_needed = true;
         std::string str;
         bool is_vocab;
-        if (!readString(str,&is_vocab)) return "";
+        if (!readString(str,&is_vocab)) {
+            fail();
+            return "";
+        }
         if (!is_vocab) return str.c_str();
         while (is_vocab&&state->len>0) {
-            int x = reader.expectInt();
-            reader.pushInt(x);
-            is_vocab = (x==BOTTLE_TAG_VOCAB);
+            if (state->code>=0) {
+                is_vocab = (state->code==BOTTLE_TAG_VOCAB);
+            } else {
+                int x = reader.expectInt();
+                reader.pushInt(x);
+                is_vocab = (x==BOTTLE_TAG_VOCAB);
+            }
             if (is_vocab) {
                 std::string str2;
                 if (!readString(str2,&is_vocab)) return "";
@@ -322,7 +368,6 @@ public:
     }
 
     bool writeString(const std::string& tag) {
-        //printf("Writing [%s]\n", tag.c_str());
         writer.appendInt(BOTTLE_TAG_STRING);
         writer.appendInt((int)tag.length()+1);
         writer.appendString(tag.c_str(),'\0');
@@ -346,6 +391,67 @@ public:
     bool writeListEnd() {
         return true;
     }
+};
+
+class yarp::os::WireLink {
+private:
+    yarp::os::Port *port;
+    bool replies;
+public:
+    WireLink() { port = 0/*NULL*/; replies = true; }
+
+    bool isValid() const { return port!=0/*NULL*/; }
+
+    bool attach(yarp::os::Port& port, bool replies) {
+        this->port = &port;
+        this->replies = replies;
+        return true;
+    }
+
+    bool write(PortWriter& writer) {
+        if (!isValid()) return false;
+        return port->write(writer);
+    }
+    
+    bool write(PortWriter& writer, PortReader& reader) {
+        if (!isValid()) return false;
+        if (!replies) { port->write(writer); return false; }
+        return port->write(writer,reader);
+    }
+
+    bool stream() { 
+        replies = false;
+        return true;
+    }
+
+    bool query() { 
+        replies = true;
+        return true;
+    }
+};
+
+
+class yarp::os::Wire : public PortReader {
+private:
+    WireLink _link;
+public:
+    bool serve(yarp::os::Port& port) {
+        _link.attach(port,true);
+        port.setReader(*this);
+        return true;
+    }
+
+    bool stream(yarp::os::Port& port) {
+        _link.attach(port,false);
+        return true;
+    }
+
+    bool query(yarp::os::Port& port) {
+        _link.attach(port,true);
+        return true;
+    }
+
+    WireLink& link() { return _link; }
 };
 
 

@@ -959,22 +959,9 @@ void t_yarp_generator::generate_service(t_service* tservice) {
       f_srv_ << endl;
     }
 
-    f_srv_ << "class " << service_name_ << " : public yarp::os::PortReader {" << endl;
-    f_srv_ << "private:" << endl;
-    indent_up();
-    indent(f_srv_) << "yarp::os::Port *port;" << endl;
-    indent_down();
+    f_srv_ << "class " << service_name_ << " : public yarp::os::Wire {" << endl;
     f_srv_ << "public:" << endl;
     indent_up();
-    indent(f_srv_) << service_name_ 
-		   << "() { port = 0/*NULL*/; }" << endl;
-    indent(f_srv_) << "bool attachPort(yarp::os::Port& port) {" << endl;
-    indent_up();
-    indent(f_srv_) << "this->port = &port;" << endl;
-    indent(f_srv_) << "port.setReader(*this);" << endl;
-    indent(f_srv_) << "return true;" << endl;
-    indent_down();
-    indent(f_srv_) << "}" << endl;
     fn_iter = functions.begin();
     for ( ; fn_iter != functions.end(); fn_iter++) {
       indent(f_srv_) << "virtual " << function_prototype(*fn_iter) 
@@ -986,12 +973,14 @@ void t_yarp_generator::generate_service(t_service* tservice) {
       if (!returntype->is_void()) {
 	indent(f_srv_) << declare_field(&returnfield, true) << endl;
       }
+      /*
       indent(f_srv_) << "if (!port) ";
       if (returntype->is_void()) {
         f_srv_ << "return;" << endl;
       } else {
 	f_srv_ << "return _return;" << endl;
       }
+      */
       indent(f_srv_) << service_name_ << "_" << (*fn_iter)->get_name() 
 		     << " helper;" << endl;
       vector<t_field*> args = (*fn_iter)->get_arglist()->get_members();
@@ -1008,9 +997,9 @@ void t_yarp_generator::generate_service(t_service* tservice) {
 	f_srv_ << "bool ok = ";
       }
       if (!(*fn_iter)->is_oneway()) {
-	f_srv_ << "port->write(helper,helper);" << endl;
+	f_srv_ << "link().write(helper,helper);" << endl;
       } else {
-	f_srv_ << "port->write(helper);" << endl;
+	f_srv_ << "link().write(helper);" << endl;
       }
       if (!returntype->is_void()) {
 	indent(f_srv_);
@@ -1029,8 +1018,8 @@ void t_yarp_generator::generate_service(t_service* tservice) {
     indent(f_srv_) << "if (!reader.readListHeader()) return false;"
 		   << endl;
     indent(f_srv_) << "yarp::os::ConstString tag = reader.readTag();" << endl;
-    indent(f_srv_) << "if (reader.isError()) return false;" << endl;
-    indent(f_srv_) << "bool ok = true;" << endl;
+    indent(f_srv_) << "while (!reader.isError()) {";
+    indent_up();
     indent(f_srv_) << "// TODO: use quick lookup, this is just a test" << endl;
     //indent_up();
     fn_iter = functions.begin();
@@ -1074,13 +1063,17 @@ void t_yarp_generator::generate_service(t_service* tservice) {
 	if (!returntype->is_void()) {
 	  generate_serialize_field(f_srv_, &returnfield, "");
 	}
-	indent(f_srv_) << "return true;" << endl;
-      }
+      } 
+      indent(f_srv_) << "return true;" << endl;
       indent_down();
       indent(f_srv_) << "}" << endl;
     }
     //indent_down();
-    //indent(f_srv_) << "}" << endl;
+    indent(f_srv_) << "yarp::os::ConstString next_tag = reader.readTag();" << endl;
+    indent(f_srv_) << "if (next_tag==\"\") break;" << endl;
+    indent(f_srv_) << "tag = tag + \"_\" + next_tag;" << endl;
+    indent_down();
+    indent(f_srv_) << "}" << endl;
     indent(f_srv_) << "return false;" << endl;
     indent_down();
     indent(f_srv_) << "}" << endl;
