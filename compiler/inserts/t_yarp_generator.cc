@@ -56,8 +56,9 @@ public:
 	if (ct1>ct_max) ct_max = ct1;
       }
     }
-    split = (ct_max<=4);
-    len = split?ct:1;
+    //split = (ct_max<=4);
+    //len = split?ct:1;
+    len = ct;
   }
 };
 
@@ -189,6 +190,13 @@ class t_yarp_generator : public t_oop_generator {
 
   std::ofstream f_out_;
   bool gen_pure_enums_;
+
+ void print_const_value(std::ofstream& out, std::string name, t_type* type, t_const_value* value);
+  std::string render_const_value(std::ofstream& out, std::string name, t_type* type, t_const_value* value);
+
+  int flat_element_count( t_type* type);
+  int flat_element_count( t_struct* type);
+  int flat_element_count(t_function* fn);
 };
 
 
@@ -782,7 +790,7 @@ void t_yarp_generator::generate_struct(t_struct* tstruct) {
   string name = tstruct->get_name();
   bool except = tstruct->is_xception();
   vector<t_field*> members = tstruct->get_members();
-  vector<t_field*>::iterator mem_iter = members.begin();
+  vector<t_field*>::iterator mem_iter;
 
   f_stt_ << "#ifndef YARP_THRIFT_GENERATOR_STRUCT_" << name << endl;
   f_stt_ << "#define YARP_THRIFT_GENERATOR_STRUCT_" << name << endl;
@@ -790,16 +798,106 @@ void t_yarp_generator::generate_struct(t_struct* tstruct) {
   f_stt_ << "#include <yarp/os/Wire.h>" << endl;
   f_stt_ << endl;
 
-  f_stt_ << "class " << name << " : public yarp::os::Portable {" << endl;
+  f_stt_ << "class " << name << " : public yarp::os::WirePortable {" << endl;
   f_stt_ << "public:" << endl;
   indent_up();
 
-  for ( ; mem_iter != members.end(); mem_iter++) {
+
+  for (mem_iter = members.begin() ; mem_iter != members.end(); mem_iter++) {
     string mname = (*mem_iter)->get_name();
     string mtype = print_type((*mem_iter)->get_type());
     indent(f_stt_) << mtype << " " << mname << ";" << endl; 
   }
-  mem_iter = members.begin();
+
+
+
+  ofstream& out = f_stt_;
+
+  // Default constructor
+  indent(out) <<
+    tstruct->get_name() << "()";
+  
+  bool init_ctor = false;
+
+  vector<t_field*>::const_iterator m_iter;
+  for (m_iter = members.begin(); m_iter != members.end(); ++m_iter) {
+    t_type* t = get_true_type((*m_iter)->get_type());
+    if (t->is_base_type() || t->is_enum()) {
+      string dval;
+      if (t->is_enum()) {
+	dval += "(" + type_name(t) + ")";
+      }
+      dval += t->is_string() ? "\"\"" : "0";
+      t_const_value* cv = (*m_iter)->get_value();
+      if (cv != NULL) {
+	dval = render_const_value(out, (*m_iter)->get_name(), t, cv);
+      }
+      if (!init_ctor) {
+	init_ctor = true;
+	out << " : ";
+	out << (*m_iter)->get_name() << "(" << dval << ")";
+      } else {
+	out << ", " << (*m_iter)->get_name() << "(" << dval << ")";
+      }
+    }
+  }
+  out << " {" << endl;
+  indent_up();
+  for (m_iter = members.begin(); m_iter != members.end(); ++m_iter) {
+    t_type* t = get_true_type((*m_iter)->get_type());
+    
+    if (!t->is_base_type()) {
+      t_const_value* cv = (*m_iter)->get_value();
+      if (cv != NULL) {
+	print_const_value(out, (*m_iter)->get_name(), t, cv);
+      }
+    }
+  }
+  scope_down(out);
+
+
+
+
+  // Fill-out constructor
+  indent(out) << tstruct->get_name() << "(";
+  init_ctor = false;
+  for (m_iter = members.begin(); m_iter != members.end(); ++m_iter) {
+    t_type* t = get_true_type((*m_iter)->get_type());
+    if (init_ctor) out << ",";
+    init_ctor = true;
+    out << type_name(t,false,true) << " ";
+    out << (*m_iter)->get_name();
+  }
+  out << ")";
+
+  init_ctor = false;
+  for (m_iter = members.begin(); m_iter != members.end(); ++m_iter) {
+    t_type* t = get_true_type((*m_iter)->get_type());
+    if (!init_ctor) {
+      init_ctor = true;
+      out << " : ";
+      out << (*m_iter)->get_name() << "(" << (*m_iter)->get_name() << ")";
+    } else {
+      out << ", " << (*m_iter)->get_name() << "(" << (*m_iter)->get_name() << ")";
+    }
+  }
+  out << " {" << endl;
+  indent_up();
+  scope_down(out);
+
+
+  indent(f_stt_) << "bool read(yarp::os::WireReader& reader) {" 
+		 << endl;
+  indent_up();
+  for (mem_iter = members.begin() ; mem_iter != members.end(); mem_iter++) {
+    string mname = (*mem_iter)->get_name();
+    string mtype = print_type((*mem_iter)->get_type());
+    generate_deserialize_field(f_stt_, *mem_iter, "");
+  }
+  indent(f_stt_) << "return !reader.isError();" 
+		 << endl;
+  indent_down();
+  indent(f_stt_) << "}" << endl;
 
   indent(f_stt_) << "bool read(yarp::os::ConnectionReader& connection) {" 
 		 << endl;
@@ -810,17 +908,23 @@ void t_yarp_generator::generate_struct(t_struct* tstruct) {
 		 << members.size()
 		 << ")) return false;"
 		 << endl;
-  for ( ; mem_iter != members.end(); mem_iter++) {
+  indent(f_stt_) << "return read(reader);"  << endl;
+  scope_down(f_stt_);
+
+
+
+  indent(f_stt_) << "bool write(yarp::os::WireWriter& writer) {" 
+		 << endl;
+  indent_up();
+  for (mem_iter=members.begin() ; mem_iter != members.end(); mem_iter++) {
     string mname = (*mem_iter)->get_name();
     string mtype = print_type((*mem_iter)->get_type());
-    //indent(f_stt_) << "// read: " << mtype << " " << mname << ";" << endl; 
-    generate_deserialize_field(f_stt_, *mem_iter, "");
+    generate_serialize_field(f_stt_, *mem_iter, "");
   }
-  indent(f_stt_) << "return !reader.isError();" 
+  indent(f_stt_) << "return !writer.isError();" 
 		 << endl;
-  indent_down();
-  indent(f_stt_) << "}" << endl;
-  mem_iter = members.begin();
+  scope_down(f_stt_);
+
 
 
   indent(f_stt_) << "bool write(yarp::os::ConnectionWriter& connection) {" 
@@ -829,21 +933,11 @@ void t_yarp_generator::generate_struct(t_struct* tstruct) {
   indent(f_stt_) << "yarp::os::WireWriter writer(connection);" 
 		 << endl;
   indent(f_stt_) << "if (!writer.writeListHeader(" 
-		 << members.size()
+		 << flat_element_count(tstruct)
 		 << ")) return false;"
 		 << endl;
-  for ( ; mem_iter != members.end(); mem_iter++) {
-    string mname = (*mem_iter)->get_name();
-    string mtype = print_type((*mem_iter)->get_type());
-    //indent(f_stt_) << "// write: " << mtype << " " << mname << ";" << endl; 
-    generate_serialize_field(f_stt_, *mem_iter, "");
-    //generate_serialize_field(f_stt_, *mem_iter, "this->");
-  }
-  indent(f_stt_) << "return !writer.isError();" 
-		 << endl;
-  indent_down();
-  indent(f_stt_) << "}" << endl;
-  mem_iter = members.begin();
+  indent(f_stt_) << "return write(writer);" << endl;
+  scope_down(f_stt_);
 
   indent_down();
   f_stt_ << "};" << endl;
@@ -926,7 +1020,7 @@ void t_yarp_generator::generate_service(t_service* tservice) {
       indent(f_srv_) << "yarp::os::WireWriter writer(connection);" 
 		     << endl;
       indent(f_srv_) << "if (!writer.writeListHeader(" 
-		     << args.size()+y.len
+		     << flat_element_count(*fn_iter)+y.len
 		     << ")) return false;"
 		     << endl;
       arg_iter = args.begin();
@@ -1494,6 +1588,142 @@ string t_yarp_generator::declare_field(t_field* tfield, bool init, bool pointer,
   return result;
 }
 
+
+
+void t_yarp_generator::print_const_value(ofstream& out, string name, t_type* type, t_const_value* value) {
+  type = get_true_type(type);
+  if (type->is_base_type()) {
+    string v2 = render_const_value(out, name, type, value);
+    indent(out) << name << " = " << v2 << ";" << endl <<
+      endl;
+  } else if (type->is_enum()) {
+    indent(out) << name << " = (" << type_name(type) << ")" << value->get_integer() << ";" << endl <<
+      endl;
+  } else if (type->is_struct() || type->is_xception()) {
+    const vector<t_field*>& fields = ((t_struct*)type)->get_members();
+    vector<t_field*>::const_iterator f_iter;
+    const map<t_const_value*, t_const_value*>& val = value->get_map();
+    map<t_const_value*, t_const_value*>::const_iterator v_iter;
+    for (v_iter = val.begin(); v_iter != val.end(); ++v_iter) {
+      t_type* field_type = NULL;
+      for (f_iter = fields.begin(); f_iter != fields.end(); ++f_iter) {
+        if ((*f_iter)->get_name() == v_iter->first->get_string()) {
+          field_type = (*f_iter)->get_type();
+        }
+      }
+      if (field_type == NULL) {
+        throw "type error: " + type->get_name() + " has no field " + v_iter->first->get_string();
+      }
+      string val = render_const_value(out, name, field_type, v_iter->second);
+      indent(out) << name << "." << v_iter->first->get_string() << " = " << val << ";" << endl;
+      indent(out) << name << ".__isset." << v_iter->first->get_string() << " = true;" << endl;
+    }
+    out << endl;
+  } else if (type->is_map()) {
+    t_type* ktype = ((t_map*)type)->get_key_type();
+    t_type* vtype = ((t_map*)type)->get_val_type();
+    const map<t_const_value*, t_const_value*>& val = value->get_map();
+    map<t_const_value*, t_const_value*>::const_iterator v_iter;
+    for (v_iter = val.begin(); v_iter != val.end(); ++v_iter) {
+      string key = render_const_value(out, name, ktype, v_iter->first);
+      string val = render_const_value(out, name, vtype, v_iter->second);
+      indent(out) << name << ".insert(std::make_pair(" << key << ", " << val << "));" << endl;
+    }
+    out << endl;
+  } else if (type->is_list()) {
+    t_type* etype = ((t_list*)type)->get_elem_type();
+    const vector<t_const_value*>& val = value->get_list();
+    vector<t_const_value*>::const_iterator v_iter;
+    for (v_iter = val.begin(); v_iter != val.end(); ++v_iter) {
+      string val = render_const_value(out, name, etype, *v_iter);
+      indent(out) << name << ".push_back(" << val << ");" << endl;
+    }
+    out << endl;
+  } else if (type->is_set()) {
+    t_type* etype = ((t_set*)type)->get_elem_type();
+    const vector<t_const_value*>& val = value->get_list();
+    vector<t_const_value*>::const_iterator v_iter;
+    for (v_iter = val.begin(); v_iter != val.end(); ++v_iter) {
+      string val = render_const_value(out, name, etype, *v_iter);
+      indent(out) << name << ".insert(" << val << ");" << endl;
+    }
+    out << endl;
+  } else {
+    throw "INVALID TYPE IN print_const_value: " + type->get_name();
+  }
+}
+
+
+string t_yarp_generator::render_const_value(ofstream& out, string name, t_type* type, t_const_value* value) {
+  (void) name;
+  std::ostringstream render;
+
+  if (type->is_base_type()) {
+    t_base_type::t_base tbase = ((t_base_type*)type)->get_base();
+    switch (tbase) {
+    case t_base_type::TYPE_STRING:
+      render << '"' << get_escaped_string(value) << '"';
+      break;
+    case t_base_type::TYPE_BOOL:
+      render << ((value->get_integer() > 0) ? "true" : "false");
+      break;
+    case t_base_type::TYPE_BYTE:
+    case t_base_type::TYPE_I16:
+    case t_base_type::TYPE_I32:
+      render << value->get_integer();
+      break;
+    case t_base_type::TYPE_I64:
+      render << value->get_integer() << "LL";
+      break;
+    case t_base_type::TYPE_DOUBLE:
+      if (value->get_type() == t_const_value::CV_INTEGER) {
+        render << value->get_integer();
+      } else {
+        render << value->get_double();
+      }
+      break;
+    default:
+      throw "compiler error: no const of base type " + t_base_type::t_base_name(tbase);
+    }
+  } else if (type->is_enum()) {
+    render << "(" << type_name(type) << ")" << value->get_integer();
+  } else {
+    string t = tmp("tmp");
+    indent(out) << type_name(type) << " " << t << ";" << endl;
+    print_const_value(out, t, type, value);
+    render << t;
+  }
+
+  return render.str();
+}
+
+
+int t_yarp_generator::flat_element_count(t_type* type) {
+  if (!type->is_struct()) {
+    return 1;
+  }
+  return flat_element_count((t_struct*)type);
+}
+
+int t_yarp_generator::flat_element_count(t_struct* tstruct) {
+  vector<t_field*> members = tstruct->get_members();
+  vector<t_field*>::iterator mem_iter;
+  int ct = 0;
+  for (mem_iter = members.begin() ; mem_iter != members.end(); mem_iter++) {
+    ct += flat_element_count((*mem_iter)->get_type());
+  }
+  return ct;
+}
+
+int t_yarp_generator::flat_element_count(t_function* fn) {
+  vector<t_field*> members = fn->get_arglist()->get_members();
+  vector<t_field*>::iterator mem_iter;
+  int ct = 0;
+  for (mem_iter = members.begin() ; mem_iter != members.end(); mem_iter++) {
+    ct += flat_element_count((*mem_iter)->get_type());
+  }
+  return ct;
+}
 
 
 THRIFT_REGISTER_GENERATOR(yarp, "YARP", "")

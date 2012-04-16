@@ -12,12 +12,16 @@ int main(int argc, char *argv[]) {
   }
   Network yarp;
   Port port;
-  port.open("/motor/client");
-  yarp.connect("/motor/client",argv[1],"text_ack");
+  if (!port.open("/motor/client")) {
+    fprintf(stderr,"Failed to open a port, maybe run: yarpserver\n");
+    return 1;
+  }
+
+  //yarp.connect("/motor/client",argv[1],"text_ack");
+  yarp.connect("/motor/client",argv[1]);
   Motor motor;
   motor.query(port);
   int nj = motor.get_axes();
-  printf("Number of axes is %d\n", nj);
 
   vector<double> poss;
   for (int i=0; i<nj; i++) {

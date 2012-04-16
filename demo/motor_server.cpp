@@ -47,7 +47,10 @@ public:
 int main(int argc, char *argv[]) {
   Network yarp;
   Port portRpc, portCommand, portState;
-  portRpc.open("/motor/server/rpc:i");
+  if (!portRpc.open("/motor/server/rpc:i")) {
+    fprintf(stderr,"Failed to open a port, maybe run: yarpserver\n");
+    return 1;
+  }
   portCommand.open("/motor/server/command:i");
   portState.open("/motor/server/state:o");
   MotorImpl motor;

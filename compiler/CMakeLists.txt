@@ -10,10 +10,24 @@ if (THRIFT_ROOT)
   set(THRIFT_COMPILER_SOURCE ${THRIFT_ROOT}/compiler/cpp)
 endif ()
 
-option(WITH_INSERTS "Add extra generators" ON)
+option(WITH_INSERTS "Add YARP generator" ON)
+option(WITH_BASE "Add regular generators" OFF)
+
 
 file(GLOB_RECURSE thrift_source_cc ${THRIFT_COMPILER_SOURCE}/src/*.cc)
 file(GLOB_RECURSE thrift_source_c ${THRIFT_COMPILER_SOURCE}/src/*.c)
+
+if (NOT WITH_BASE)
+  set(tmp_src ${thrift_source_cc})
+  set(thrift_source_cc)
+  foreach(f ${tmp_src}) 
+    string(REGEX MATCH "t_([a-z0-9_]+)_generator[.]cc$" isgen ${f})
+    if (NOT isgen)
+      list(APPEND thrift_source_cc ${f})
+    endif ()
+  endforeach ()
+endif ()
+
 if (WITH_INSERTS)
   file(GLOB_RECURSE insert_source_cc inserts/*.cc)
 endif()

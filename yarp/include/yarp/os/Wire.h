@@ -26,8 +26,15 @@ namespace yarp {
         class WireReader;
         class WireWriter;
         class WireLink;
+        class WirePortable;
     }
 }
+
+class yarp::os::WirePortable : public Portable {
+public:
+    virtual bool read(yarp::os::WireReader& reader) = 0;
+    virtual bool write(yarp::os::WireWriter& writer) = 0;
+};
 
 class yarp::os::NullConnectionWriter : public ConnectionWriter {
 public:
@@ -97,12 +104,16 @@ public:
     WireState baseState;
     WireState *state;
     bool flush_if_needed;
+    bool get_mode;
+    std::string get_string;
+    bool get_is_vocab;
 
     WireReader(ConnectionReader& reader) : reader(reader) {
         reader.convertTextMode();
         state = &baseState;
         size_t pending = reader.getSize();
         flush_if_needed = false;
+        get_mode = false;
     }
 
     ~WireReader() {
@@ -136,10 +147,15 @@ public:
         b.write(getWriter());
     }
 
-    bool read(PortReader& obj) {
-        state->len--;
-        return obj.read(reader);
+
+    bool read(WirePortable& obj) {
+        return obj.read(*this);
     }
+
+    //bool read(PortReader& obj) {
+    //  state->len--;
+    //  return obj.read(reader);
+    //}
 
     bool readI32(int32_t& x) {
         size_t pending = reader.getSize();
@@ -273,6 +289,7 @@ public:
             fail();
             return "";
         }
+        scanString(str,is_vocab);
         if (!is_vocab) return str.c_str();
         while (is_vocab&&state->len>0) {
             if (state->code>=0) {
@@ -285,6 +302,7 @@ public:
             if (is_vocab) {
                 std::string str2;
                 if (!readString(str2,&is_vocab)) return "";
+                scanString(str2,is_vocab);
                 str += "_";
                 str += str2;
             }
@@ -303,23 +321,60 @@ public:
     void readListEnd() {
         state = state->parent;
     }
+private:
+    void scanString(std::string& str, bool is_vocab) {
+        if (get_string=="") {
+            if (get_mode && get_string=="") {
+                get_string = str;
+                get_is_vocab = is_vocab;
+            } else if (str=="get") {
+                get_mode = true;
+            } else {
+                get_string = "alt";
+            }
+        }
+    }
 };
 
 class yarp::os::WireWriter {
+private:
+    bool get_mode;
+    std::string get_string;
+    bool get_is_vocab;
+    bool need_ok;
 public:
     ConnectionWriter& writer;
 
     WireWriter(ConnectionWriter& writer) : writer(writer) {
+        get_mode = get_is_vocab = false;
+        need_ok = false;
         writer.convertTextMode();
     }
 
     WireWriter(WireReader& reader) : writer(reader.getWriter()) {
+        get_is_vocab = false;
+        need_ok = false;
         writer.convertTextMode();
+        get_mode = reader.get_mode;
+        if (get_mode) {
+            get_string = reader.get_string;
+            get_is_vocab = reader.get_is_vocab;
+        }
     }
 
-    bool write(PortWriter& obj) {
-        return obj.write(writer);
+    ~WireWriter() {
+        if (need_ok) {
+            writeBool(true);
+        }
     }
+
+    bool write(WirePortable& obj) {
+        return obj.write(*this);
+    }
+
+    //bool write(PortWriter& obj) {
+    //return obj.write(writer);
+    //}
 
     bool writeI32(int32_t x) {
         writer.appendInt(BOTTLE_TAG_INT);
@@ -357,8 +412,12 @@ public:
             ch = *tag;
             tag++;
             if (ch=='\0'||ch=='_') {
-                writer.appendInt(BOTTLE_TAG_VOCAB);
-                writer.appendInt(Vocab::encode(bit));
+                if (bit.length()<=4) {
+                    writer.appendInt(BOTTLE_TAG_VOCAB);
+                    writer.appendInt(Vocab::encode(bit));
+                } else {
+                    writeString(bit.c_str());
+                }
                 bit = "";
             } else {
                 bit += ch;
@@ -376,7 +435,20 @@ public:
 
     bool writeListHeader(int len) {
         writer.appendInt(BOTTLE_TAG_LIST);
-        writer.appendInt(len);
+        if (get_mode) {
+            writer.appendInt(len+3);
+            writer.appendInt(BOTTLE_TAG_VOCAB);
+            writer.appendInt(VOCAB2('i','s'));
+            if (get_is_vocab) {
+                writer.appendInt(BOTTLE_TAG_VOCAB);
+                writer.appendInt(Vocab::encode(get_string.c_str()));
+            } else {
+                writeString(get_string);
+            }
+            need_ok = true;
+        } else {
+            writer.appendInt(len);
+        }
         return !writer.isError();
     }
 

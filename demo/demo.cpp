@@ -1,5 +1,5 @@
 #include <stdio.h>
-#include "Point.h"
+#include "PointD.h"
 #include "Demo.h"
 #include <yarp/os/all.h>
 
@@ -24,9 +24,9 @@ public:
     return x + "x";
   }
 
-  virtual Point add_point(const Point& x, const Point& y) {
+  virtual PointD add_point(const PointD& x, const PointD& y) {
     printf("Server::add_point called\n");
-    Point z;
+    PointD z;
     z.x = x.x + y.x;
     z.y = x.y + y.y;
     z.z = x.z + y.z;
@@ -40,7 +40,10 @@ int main(int argc, char *argv[]) {
 
   Network yarp;
   Port server_port, client_port;
-  server_port.open("/demo");
+  if (!server_port.open("/demo")) {
+    fprintf(stderr,"Failed to open a port, maybe run: yarpserver\n");
+    return 1;
+  }
 
   bool client = !config.check("server");
 
@@ -53,11 +56,11 @@ int main(int argc, char *argv[]) {
   RemoteDemo server;
   server.serve(server_port);
   Demo demo;
-  Point point;
+  PointD point;
   point.x = 0;
   point.y = 0;
   point.z = 0;
-  Point offset;
+  PointD offset;
   offset.x = 1;
   offset.y = 2;
   offset.z = 3;
