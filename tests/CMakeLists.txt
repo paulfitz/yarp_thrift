@@ -14,7 +14,10 @@ endmacro()
 ##########################################################################
 ##########################################################################
 
-add_test(minimal_cpp ${tcc} --gen cpp ${TESTS}/minimal/test.thrift)
+if (WITH_BASE)
+  add_test(minimal_cpp ${tcc} --gen cpp ${TESTS}/minimal/test.thrift)
+endif ()
+
 add_test(minimal_yarp ${tcc} --gen yarp ${TESTS}/minimal/test.thrift)
 
 # Check for failure for non-existent generator type.

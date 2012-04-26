@@ -1024,7 +1024,7 @@ void t_yarp_generator::generate_service(t_service* tservice) {
 		     << ")) return false;"
 		     << endl;
       arg_iter = args.begin();
-      indent(f_srv_) << "if (!writer.writeTag(\"" << y.name << "\"," << y.split << "," << y.len << ")) return false;" << endl;
+      indent(f_srv_) << "if (!writer.writeTag(\"" << y.name << "\",1," << y.len << ")) return false;" << endl;
       if (arg_iter != args.end()) {
 	for ( ; arg_iter != args.end(); arg_iter++) {
 	  generate_serialize_field(f_srv_, *arg_iter, "");

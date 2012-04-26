@@ -107,6 +107,7 @@ public:
     bool get_mode;
     std::string get_string;
     bool get_is_vocab;
+    bool support_get_mode;
 
     WireReader(ConnectionReader& reader) : reader(reader) {
         reader.convertTextMode();
@@ -114,6 +115,7 @@ public:
         size_t pending = reader.getSize();
         flush_if_needed = false;
         get_mode = false;
+        support_get_mode = false;
     }
 
     ~WireReader() {
@@ -125,6 +127,10 @@ public:
         if (flush_if_needed) {
             clear();
         }
+    }
+
+    void allowGetMode() {
+        support_get_mode = true;
     }
 
     bool clear() {
@@ -253,6 +259,7 @@ public:
 
     bool readListReturn() {
         if (!readListHeader()) return false;
+        if (!support_get_mode) return true;
         if (state->len == 1) return true;
         if (state->len != 4) return false;
         // possibly old-style return: [is] foo val [ok]
@@ -323,6 +330,7 @@ public:
     }
 private:
     void scanString(std::string& str, bool is_vocab) {
+        if (!support_get_mode) return;
         if (get_string=="") {
             if (get_mode && get_string=="") {
                 get_string = str;
